@@ -20,7 +20,7 @@ import config
 # Page configuration
 st.set_page_config(
     page_title="Saudi Code Matcher",
-    page_icon="🏥",
+    page_icon="",
     layout="wide",
 )
 

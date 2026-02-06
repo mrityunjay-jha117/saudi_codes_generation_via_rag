@@ -53,14 +53,15 @@ class CodeMatcher:
         # Initialize LLM
         if config.USE_LOCAL:
             from langchain_community.llms import Ollama
-            self.llm = Ollama(model="gemma3:1b", temperature=config.LLM_TEMPERATURE)
-            self.use_new_genai = False
+            self.llm = Ollama(model="gemma2:2b", temperature=config.LLM_TEMPERATURE)
         else:
-            # Use the NEW google.genai SDK (the old one is deprecated)
-            from google import genai
-            self.genai_client = genai.Client(api_key=config.GEMINI_API_KEY)
-            self.llm = None  # We'll call the client directly
-            self.use_new_genai = True
+            # Use OpenAI GPT
+            from langchain_openai import ChatOpenAI
+            self.llm = ChatOpenAI(
+                model=config.LLM_MODEL,
+                temperature=config.LLM_TEMPERATURE,
+                api_key=config.OPENAI_API_KEY
+            )
 
     def match_single(self, service_description: str) -> dict:
         """
@@ -131,18 +132,12 @@ class CodeMatcher:
 
         # Step 4: Call LLM
         try:
-            if config.USE_LOCAL:
-                response_text = self.llm.invoke(prompt)
-            elif self.use_new_genai:
-                # Use the new google.genai SDK
-                response = self.genai_client.models.generate_content(
-                    model=config.LLM_MODEL,
-                    contents=prompt
-                )
-                response_text = response.text
-            else:
-                response = self.llm.invoke(prompt)
+            response = self.llm.invoke(prompt)
+            # Extract text from response
+            if hasattr(response, 'content'):
                 response_text = response.content
+            else:
+                response_text = str(response)
         except Exception as e:
             # Print full error for debugging
             print(f"LLM Error: {str(e)}")
