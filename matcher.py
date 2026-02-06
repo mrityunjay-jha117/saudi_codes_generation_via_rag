@@ -144,13 +144,18 @@ class CodeMatcher:
                 response = self.llm.invoke(prompt)
                 response_text = response.content
         except Exception as e:
+            # Print full error for debugging
+            print(f"LLM Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
             # If LLM call fails, fall back to top retrieval result
             return {
                 "matched_code": top_doc.metadata["code"],
                 "code_system": top_doc.metadata["system"],
                 "matched_description": top_doc.metadata["description"],
                 "confidence": "LOW",
-                "reasoning": f"LLM call failed: {str(e)[:50]}; using vector similarity",
+                "reasoning": f"LLM call failed: {str(e)[:100]}; using vector similarity",
             }
 
         # Step 5: Parse JSON response

@@ -5,7 +5,7 @@ load_dotenv()
 
 # LLM & Embedding
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-LLM_MODEL = "gemini-2.0-flash"  # Using 2.0-flash (higher rate limits than 2.5-pro)
+LLM_MODEL = "models/gemini-2.0-flash"  # Full path required for google.genai SDK
 LLM_TEMPERATURE = 0.0
 
 # If no Gemini key, fall back to local models
