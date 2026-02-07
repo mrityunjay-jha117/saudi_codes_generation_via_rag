@@ -40,15 +40,27 @@ class CodeMatcher:
         if config.USE_LOCAL:
             from langchain_community.llms import Ollama
             self.llm = Ollama(model="gemma2:2b", temperature=config.LLM_TEMPERATURE)
+            self.use_boto = False
         else:
-            # Use AWS Bedrock
-            from langchain_aws import ChatBedrock
-            self.llm = ChatBedrock(
-                model_id=config.LLM_MODEL,
-                model_kwargs={"temperature": config.LLM_TEMPERATURE},
-                region_name=config.AWS_REGION,
-                credentials_profile_name=None,  # Use environment variables
+            # Use AWS Bedrock via Boto3 SDK
+            import boto3
+            from botocore.config import Config
+            
+            # Configure retry strategy
+            boto_config = Config(
+                retries={
+                    'max_attempts': 5,
+                    'mode': 'adaptive'
+                }
             )
+            
+            self.bedrock_client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=config.AWS_REGION,
+                config=boto_config
+            )
+            self.llm_model_id = config.LLM_MODEL
+            self.use_boto = True
         
         # Initialize cache for performance optimization
         self.cache = {}
@@ -238,35 +250,93 @@ class CodeMatcher:
         base_delay = 5
 
         response_text = None
-        for attempt in range(max_retries):
-            try:
-                response = self.llm.invoke(prompt)
-                if hasattr(response, 'content'):
-                    response_text = response.content
-                else:
-                    response_text = str(response)
-                break
-            except Exception as e:
-                error_msg = str(e)
-                if "ThrottlingException" in error_msg or "Too many requests" in error_msg:
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt)
-                        print(f"Rate limited, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
-                        time.sleep(delay)
-                        continue
+        
+        # Prepare execution based on the selected LLM (Boto3 vs Local)
+        if self.use_boto:
+            # AWS Bedrock via Boto3
+            payload = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": prompt}]
+                    }
+                ],
+                "temperature": config.LLM_TEMPERATURE
+            }
+            body = json.dumps(payload)
+            
+            import botocore
+            
+            for attempt in range(max_retries):
+                try:
+                    response = self.bedrock_client.invoke_model(
+                        body=body,
+                        modelId=self.llm_model_id,
+                        accept="application/json",
+                        contentType="application/json"
+                    )
+                    
+                    response_body = json.loads(response.get("body").read())
+                    response_text = response_body["content"][0]["text"]
+                    break
+                    
+                except botocore.exceptions.ClientError as e:
+                    error_code = e.response['Error']['Code']
+                    if error_code in ["ThrottlingException", "TooManyRequestsException"]:
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            print(f"Rate limited (AWS), retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(delay)
+                            continue
+                        else:
+                            print(f"Max retries reached for throttling")
+                            result = {
+                                "matched_code": None,
+                                "code_system": None,
+                                "matched_description": None,
+                                "confidence": "NONE",
+                                "reasoning": "Rate limit exceeded (AWS), please try again later",
+                            }
+                            self.cache[cache_key] = result
+                            return result
                     else:
-                        print(f"Max retries reached for throttling")
-                        result = {
-                            "matched_code": None,
-                            "code_system": None,
-                            "matched_description": None,
-                            "confidence": "NONE",
-                            "reasoning": "Rate limit exceeded, please try again later",
-                        }
+                        print(f"AWS SDK Error: {e}")
+                        result = self._extract_metadata(top_doc)
+                        result["confidence"] = "LOW"
+                        result["reasoning"] = f"AWS call failed: {str(e)[:100]}; using vector similarity"
                         self.cache[cache_key] = result
                         return result
-                else:
-                    print(f"LLM Error: {error_msg}")
+                        
+                except Exception as e:
+                        print(f"Unexpected Error: {e}")
+                        result = self._extract_metadata(top_doc)
+                        result["confidence"] = "LOW"
+                        result["reasoning"] = f"Call failed: {str(e)[:100]}; using vector similarity"
+                        self.cache[cache_key] = result
+                        return result
+
+        else:
+            # Local Ollama
+            for attempt in range(max_retries):
+                try:
+                    response = self.llm.invoke(prompt)
+                    if hasattr(response, 'content'):
+                        response_text = response.content
+                    else:
+                        response_text = str(response)
+                    break
+                except Exception as e:
+                    error_msg = str(e)
+                    if "usage limit" in error_msg.lower() or "too many requests" in error_msg.lower():
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            print(f"Rate limited (Local), retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(delay)
+                            continue
+                    
+                    print(f"Local LLM Error: {error_msg}")
                     result = self._extract_metadata(top_doc)
                     result["confidence"] = "LOW"
                     result["reasoning"] = f"LLM call failed: {error_msg[:100]}; using vector similarity"
@@ -305,9 +375,17 @@ class CodeMatcher:
         """
         result = None
         
+        # DEBUG: Print raw response to see what we're getting
+        print("\n" + "="*60)
+        print("DEBUG: Raw LLM Response:")
+        print("-"*60)
+        print(response_text[:500] if response_text else "EMPTY RESPONSE")
+        print("="*60 + "\n")
+        
         try:
             result = json.loads(response_text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"DEBUG: Initial JSON parse failed: {e}")
             # Fallback: try stripping markdown code fences
             cleaned = response_text.strip()
             if cleaned.startswith("```json"):
@@ -320,15 +398,20 @@ class CodeMatcher:
 
             try:
                 result = json.loads(cleaned)
-            except json.JSONDecodeError:
-                pass
+                print("DEBUG: Successfully parsed after cleaning markdown fences")
+            except json.JSONDecodeError as e2:
+                print(f"DEBUG: Cleaned JSON parse also failed: {e2}")
+                print(f"DEBUG: Cleaned text (first 200 chars): {cleaned[:200]}")
 
         # If parsing failed, use fallback
         if result is None:
+            print("DEBUG: Using fallback (vector similarity)")
             result = self._extract_metadata(fallback_doc)
             result["confidence"] = "LOW"
             result["reasoning"] = "LLM response parsing failed; using vector similarity"
             return result
+        
+        print(f"DEBUG: Successfully parsed JSON. Matched code: {result.get('matched_code')}")
         
         # Enrich the LLM result with system-specific fields by matching against candidates
         if candidates and result.get("matched_code"):

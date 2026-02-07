@@ -5,18 +5,12 @@ load_dotenv()
 
 # LLM & Embedding - AWS Bedrock Configuration
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 LLM_MODEL = "anthropic.claude-3-haiku-20240307-v1:0" 
 LLM_TEMPERATURE = 0.0
 
-# If no AWS credentials, fall back to local Ollama.
-# Set USE_LOCAL_LLM=1 or true to force Ollama even when AWS vars are set (e.g. expired token).
-_force_local = os.getenv("USE_LOCAL_LLM", "").strip().lower() in ("1", "true", "yes")
-USE_LOCAL = _force_local or (
-    AWS_ACCESS_KEY_ID is None or (isinstance(AWS_ACCESS_KEY_ID, str) and AWS_ACCESS_KEY_ID.strip() == "") or
-    AWS_SECRET_ACCESS_KEY is None or (isinstance(AWS_SECRET_ACCESS_KEY, str) and AWS_SECRET_ACCESS_KEY.strip() == "")
-)
+# If set to true, force usage of local Ollama model
+USE_LOCAL = os.getenv("USE_LOCAL_LLM", "").strip().lower() in ("1", "true", "yes")
 
 
 # Retrieval
