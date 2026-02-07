@@ -97,11 +97,16 @@ with st.sidebar:
         st.caption("LLM: Ollama gemma2:2b")
     else:
         st.info("Using AWS Bedrock")
-        st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace - Free)")
+        st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace)")
         st.caption(f"LLM: {config.LLM_MODEL}")
         st.caption(f"Region: {config.AWS_REGION}")
-        st.caption(f"Top-K retrieval: {config.TOP_K}")
-        st.caption(f"Auto-accept threshold: {config.AUTO_ACCEPT_THRESHOLD}")
+
+    st.divider()
+    st.subheader("V2 Features")
+    st.caption(f"Query Expansion: {'ON' if getattr(config, 'ENABLE_QUERY_EXPANSION', False) else 'OFF'}")
+    st.caption(f"Specialty Filter: {'ON' if getattr(config, 'ENABLE_SPECIALTY_FILTER', False) else 'OFF'}")
+    st.caption(f"Post-LLM Validation: {'ON' if getattr(config, 'ENABLE_POST_LLM_VALIDATION', False) else 'OFF'}")
+    st.caption(f"Candidates: {getattr(config, 'TOP_K_GENERAL', 10)} general + {getattr(config, 'TOP_K_FILTERED', 10)} filtered")
 
 
 # ============== MAIN AREA ==============

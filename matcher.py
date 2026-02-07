@@ -18,6 +18,8 @@ import pandas as pd
 from langchain_chroma import Chroma
 import config
 from prompts import MATCH_PROMPT, format_candidates
+from query_expansion import expand_query, detect_specialty
+from ingest import SentenceTransformerEmbeddings
 
 
 class CodeMatcher:
@@ -25,22 +27,6 @@ class CodeMatcher:
 
     def __init__(self):
         """Load vector store and LLM based on configuration."""
-        # Initialize embedding model using sentence-transformers (PyTorch-based, no Keras)
-        from sentence_transformers import SentenceTransformer
-        
-        class SentenceTransformerEmbeddings:
-            """Custom embedding class for LangChain compatibility."""
-            def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-                self.model = SentenceTransformer(model_name)
-            
-            def embed_documents(self, texts: list) -> list:
-                embeddings = self.model.encode(texts, convert_to_numpy=True)
-                return embeddings.tolist()
-            
-            def embed_query(self, text: str) -> list:
-                embedding = self.model.encode([text], convert_to_numpy=True)
-                return embedding[0].tolist()
-        
         self.embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
         # Load vector store from persistent directory
@@ -117,9 +103,70 @@ class CodeMatcher:
             "hit_rate": f"{hit_rate:.1f}%"
         }
 
+    def retrieve_candidates(self, service_description: str) -> list:
+        """
+        Two-pass retrieval: general similarity + specialty-filtered search.
+        Merges and deduplicates results for maximum recall with precision.
+
+        Pass 1: General semantic search across ALL codes (unfiltered)
+        Pass 2: If a specialty is detected, search WITHIN that specialty only
+
+        Args:
+            service_description: The (possibly expanded) service description.
+
+        Returns:
+            Deduplicated list of candidate Documents.
+        """
+        # Pass 1: General search
+        general_results = self.vector_store.similarity_search(
+            service_description,
+            k=config.TOP_K_GENERAL if hasattr(config, 'TOP_K_GENERAL') else config.TOP_K,
+        )
+
+        # Pass 2: Specialty-filtered search (if enabled and specialty detected)
+        filtered_results = []
+        if getattr(config, 'ENABLE_SPECIALTY_FILTER', False):
+            specialty = detect_specialty(service_description)
+            if specialty:
+                try:
+                    filtered_results = self.vector_store.similarity_search(
+                        service_description,
+                        k=config.TOP_K_FILTERED if hasattr(config, 'TOP_K_FILTERED') else config.TOP_K,
+                        filter={"chapter_name": specialty},
+                    )
+                except Exception as e:
+                    # Filtered search may fail if no docs match the filter
+                    print(f"  Filtered search failed for specialty '{specialty}': {e}")
+
+        # Merge and deduplicate (preserve order: general first, then filtered additions)
+        seen_codes = set()
+        merged = []
+
+        for doc in general_results + filtered_results:
+            code = doc.metadata.get("code", "")
+            system = doc.metadata.get("system", "")
+            key = f"{system}:{code}"
+
+            if key not in seen_codes:
+                seen_codes.add(key)
+                merged.append(doc)
+
+        max_candidates = getattr(config, 'MAX_CANDIDATES_TO_LLM', 20)
+        return merged[:max_candidates]
+
     def match_single(self, service_description: str) -> dict:
         """
         Match a single service description to a billing code.
+
+        Pipeline:
+        1. Validate input
+        2. Check cache
+        3. Expand query (abbreviations → formal SBS terminology)
+        4. Two-pass retrieval (general + specialty-filtered)
+        5. Format candidates with enriched metadata
+        6. LLM evaluation with metadata-aware prompt
+        7. Post-LLM validation
+        8. Cache and return
 
         Args:
             service_description: The input service description to match.
@@ -148,121 +195,100 @@ class CodeMatcher:
                 "reasoning": "Empty or invalid service description",
             }
 
-        # Check cache first for performance optimization
+        # Check cache
         cache_key = service_description.strip().lower()
         if cache_key in self.cache:
             self.cache_hits += 1
             return self.cache[cache_key].copy()
-        
+
         self.cache_misses += 1
 
-        # Step 1: Retrieve top-K candidates
-        # Use similarity_search instead of similarity_search_with_relevance_scores
-        # to avoid negative score warnings from ChromaDB
-        docs = self.vector_store.similarity_search(
-            service_description,
-            k=config.TOP_K,
-        )
+        # Step 1: Query expansion (abbreviation → formal terminology)
+        if getattr(config, 'ENABLE_QUERY_EXPANSION', False):
+            expanded_query = expand_query(service_description)
+        else:
+            expanded_query = service_description
+
+        # Step 2: Two-pass retrieval with expanded query
+        docs = self.retrieve_candidates(expanded_query)
 
         if not docs:
-            return {
+            result = {
                 "matched_code": None,
                 "code_system": None,
                 "matched_description": None,
                 "confidence": "NONE",
                 "reasoning": "No candidates found in vector database",
             }
-
-        # Get top document for auto-accept check
-        top_doc = docs[0]
-        
-        # For auto-accept, we'll use a simple heuristic based on exact text match
-        # instead of relying on potentially negative similarity scores
-        top_content = top_doc.page_content.lower()
-        query_lower = service_description.lower()
-        
-        # Check if query is contained in top result or vice versa
-        is_exact_match = (query_lower in top_content) or (top_content in query_lower)
-
-        # Step 2: Auto-accept optimization for high similarity matches
-        if is_exact_match:  # Using is_exact_match as a proxy for high confidence
-            result = self._extract_metadata(top_doc)
-            result["confidence"] = "HIGH"
-            result["reasoning"] = "Auto-matched (exact text match)"
-            self.cache[cache_key] = result  # Cache auto-accept results
+            self.cache[cache_key] = result
             return result
 
-        # Step 3: Build prompt with candidates
+        top_doc = docs[0]
+
+        # Step 3: Build prompt with ORIGINAL description (not expanded)
+        # and enriched candidates (with full metadata)
         candidates_text = format_candidates(docs)
         prompt = MATCH_PROMPT.format(
-            service_description=service_description,
+            service_description=service_description,  # Original, not expanded
             candidates=candidates_text,
         )
 
-        # Step 4: Call LLM with retry logic for throttling
+        # Step 4: Call LLM with retry logic
         max_retries = 5
-        base_delay = 5  # seconds (increased for more conservative rate limiting)
-        
+        base_delay = 5
+
         response_text = None
         for attempt in range(max_retries):
             try:
                 response = self.llm.invoke(prompt)
-                # Extract text from response
                 if hasattr(response, 'content'):
                     response_text = response.content
                 else:
                     response_text = str(response)
-                break  # Success, exit retry loop
-                
+                break
             except Exception as e:
                 error_msg = str(e)
-                
-                # Check if it's a throttling error
                 if "ThrottlingException" in error_msg or "Too many requests" in error_msg:
                     if attempt < max_retries - 1:
-                        # Exponential backoff: 2s, 4s, 8s, 16s, 32s
                         delay = base_delay * (2 ** attempt)
                         print(f"Rate limited, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(delay)
                         continue
                     else:
                         print(f"Max retries reached for throttling")
-                        return {
+                        result = {
                             "matched_code": None,
                             "code_system": None,
                             "matched_description": None,
                             "confidence": "NONE",
                             "reasoning": "Rate limit exceeded, please try again later",
                         }
+                        self.cache[cache_key] = result
+                        return result
                 else:
-                    # Non-throttling error
                     print(f"LLM Error: {error_msg}")
-                    # Print full error for debugging
-                    import traceback
-                    traceback.print_exc()
-                    
-                    # If LLM call fails, fall back to top retrieval result
                     result = self._extract_metadata(top_doc)
                     result["confidence"] = "LOW"
                     result["reasoning"] = f"LLM call failed: {error_msg[:100]}; using vector similarity"
+                    self.cache[cache_key] = result
                     return result
-        
-        # If response_text is still None after the loop, it means all retries failed
-        # and the last error was not a throttling error that returned early.
-        # This case should ideally be caught by the 'else' block above, but as a safeguard:
+
         if response_text is None:
-            print(f"  ❌ LLM call failed after all retries (unknown reason).")
             result = self._extract_metadata(top_doc)
             result["confidence"] = "LOW"
             result["reasoning"] = "LLM call failed after retries; using vector similarity"
+            self.cache[cache_key] = result
             return result
 
-        # Step 5: Parse JSON response and enrich with metadata
+        # Step 5: Parse LLM response
         result = self._parse_llm_response(response_text, top_doc, docs)
-        
-        # Store in cache for future requests
+
+        # Step 6: Post-LLM validation (safety net)
+        if getattr(config, 'ENABLE_POST_LLM_VALIDATION', False):
+            result = self._post_validate(result, service_description, docs)
+
+        # Cache and return
         self.cache[cache_key] = result
-        
         return result
 
     def _parse_llm_response(self, response_text: str, fallback_doc, candidates: list = None) -> dict:
@@ -328,6 +354,87 @@ class CodeMatcher:
                         result["gmdn_definition"] = doc.metadata.get("term_definition", "")
                     break
         
+        return result
+
+    def _post_validate(self, result: dict, original_input: str, candidates: list) -> dict:
+        """
+        Post-LLM validation safety net. Catches remaining LLM errors by
+        applying hard rules that override the LLM's decision.
+
+        Rules:
+        1. If input contains dental abbreviations but match is non-dental → NONE
+        2. If matched code's Excludes field matches the input → NONE
+
+        Args:
+            result: The LLM's parsed result dict.
+            original_input: The original (unexpanded) service description.
+            candidates: The candidate documents used for matching.
+
+        Returns:
+            Possibly modified result dict.
+        """
+        if not result.get("matched_code"):
+            return result  # Already null, nothing to validate
+
+        input_lower = original_input.lower()
+        matched_code = result.get("matched_code", "")
+        code_system = result.get("code_system", "")
+
+        # Rule 1: Dental abbreviation → non-dental code
+        dental_signals = ["rct", "r.c.t", "root canal", "crown", "filling",
+                          "extraction", "dental", "tooth", "pfm", "veneer",
+                          "composite", "amalgam", "endodon", "pulp"]
+        input_is_dental = any(s in input_lower for s in dental_signals)
+
+        if input_is_dental and code_system == "SBS":
+            # Find the matched document to check its chapter
+            for doc in candidates:
+                if doc.metadata.get("code") == matched_code:
+                    chapter = doc.metadata.get("chapter_name", "").upper()
+                    if chapter and "DENTAL" not in chapter and "ORAL" not in chapter:
+                        result["matched_code"] = None
+                        result["code_system"] = None
+                        result["matched_description"] = None
+                        result["confidence"] = "NONE"
+                        result["reasoning"] = (
+                            f"Post-validation rejected: dental input matched to "
+                            f"non-dental chapter ({chapter})"
+                        )
+                        return result
+                    break
+
+        # Rule 2: Check Excludes field
+        for doc in candidates:
+            if doc.metadata.get("code") == matched_code:
+                page_content = doc.page_content.lower()
+                # Extract excludes text from enriched document
+                if "excludes:" in page_content:
+                    excludes_start = page_content.index("excludes:") + len("excludes:")
+                    # Find the next section or end of string
+                    excludes_text = page_content[excludes_start:]
+                    next_section = excludes_text.find(". guideline:")
+                    if next_section == -1:
+                        next_section = len(excludes_text)
+                    excludes_text = excludes_text[:next_section].strip()
+
+                    # Check if input matches excludes content
+                    input_words = set(input_lower.split())
+                    excludes_words = set(excludes_text.split())
+                    overlap = input_words & excludes_words
+                    # If significant overlap with excludes, reject
+                    meaningful_overlap = overlap - {"the", "a", "an", "of", "and", "or", "in", "to", "for"}
+                    if len(meaningful_overlap) >= 3:
+                        result["matched_code"] = None
+                        result["code_system"] = None
+                        result["matched_description"] = None
+                        result["confidence"] = "NONE"
+                        result["reasoning"] = (
+                            f"Post-validation rejected: input matches Excludes field "
+                            f"(overlap: {', '.join(list(meaningful_overlap)[:5])})"
+                        )
+                        return result
+                break
+
         return result
 
     def match_batch(self, input_excel_path: str, output_excel_path: str) -> list:

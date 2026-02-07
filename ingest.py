@@ -48,6 +48,86 @@ def get_embedding_function():
     return SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
+def clean_field(value) -> str:
+    """Clean a DataFrame cell value, returning empty string for null/nan."""
+    if pd.isna(value):
+        return ""
+    s = str(value).strip()
+    if s.lower() in ("nan", "none", ""):
+        return ""
+    return s
+
+
+def build_enriched_sbs_document(row: pd.Series) -> Document | None:
+    """
+    Build a richly annotated Document from an SBS reference row.
+    Uses ALL available columns: Specialty (Chapter), Category (Block),
+    Clinical Explanation, Includes, Excludes, Guideline.
+    Returns None for empty/invalid rows.
+    """
+    code = clean_field(row.get("SBS Code Hyphenated"))
+    short = clean_field(row.get("Short Description"))
+
+    if not code or not short:
+        return None
+
+    long_desc = clean_field(row.get("Long Description"))
+    chapter = clean_field(row.get("Chapter Name"))
+    block = clean_field(row.get("Block Name"))
+    clinical = clean_field(row.get("Cliincal Explanation "))  # Note: typo + trailing space in source data
+    includes = clean_field(row.get("Includes"))
+    excludes = clean_field(row.get("Excludes"))
+    guideline = clean_field(row.get("Guideline"))
+    chapter_num = row.get("Chapter number")
+    block_num = clean_field(row.get("Block Number"))
+
+    # Build enriched page_content
+    parts = [f"[SBS] Code: {code}"]
+    if chapter:
+        parts.append(f"Specialty: {chapter}")
+    if block:
+        parts.append(f"Category: {block}")
+    parts.append(f"Description: {short}")
+    if long_desc and long_desc != short:
+        parts.append(f"Detail: {long_desc}")
+    if clinical:
+        parts.append(f"Clinical context: {clinical}")
+    if includes:
+        parts.append(f"Includes: {includes}")
+    if excludes:
+        parts.append(f"Excludes: {excludes}")
+    if guideline:
+        parts.append(f"Guideline: {guideline}")
+
+    page_content = ". ".join(parts)
+
+    # Get SBS Code (numeric) if available
+    sbs_code_numeric = ""
+    if "SBS Code" in row.index and pd.notna(row.get("SBS Code")):
+        try:
+            sbs_code_numeric = str(int(float(row["SBS Code"])))
+        except (ValueError, TypeError):
+            sbs_code_numeric = str(row["SBS Code"]).strip()
+
+    # Build metadata for filtered retrieval
+    metadata = {
+        "code": code,
+        "code_hyphenated": code,
+        "code_numeric": sbs_code_numeric,
+        "system": "SBS",
+        "description": short,
+        "chapter_name": chapter.upper().strip() if chapter else "",
+        "chapter_number": float(chapter_num) if pd.notna(chapter_num) else -1,
+        "block_name": block,
+        "block_number": block_num,
+        "has_excludes": bool(excludes),
+        "has_includes": bool(includes),
+        "has_clinical_explanation": bool(clinical),
+    }
+
+    return Document(page_content=page_content, metadata=metadata)
+
+
 def build_documents(excel_path: str = None) -> list[Document]:
     """
     Read reference Excel and build LangChain Documents.
@@ -67,46 +147,15 @@ def build_documents(excel_path: str = None) -> list[Document]:
     # Track counts per system
     counts = {"SBS": 0, "GTIN": 0, "GMDN": 0}
 
-    # ── SBS Documents ──
+    # ── SBS Documents (ENRICHED with all metadata) ──
     df_sbs = pd.read_excel(xls, sheet_name="SBS V3 Tabular List")
-    # Drop rows where SBS Code Hyphenated is NaN/null
     df_sbs = df_sbs.dropna(subset=["SBS Code Hyphenated"])
 
     for _, row in df_sbs.iterrows():
-        short = str(row["Short Description"]).strip()
-        long_desc = str(row["Long Description"]).strip()
-
-        # Handle NaN values that become 'nan' strings
-        if short.lower() == 'nan':
-            short = ""
-        if long_desc.lower() == 'nan':
-            long_desc = ""
-
-        # Build document text with [SBS] prefix
-        if short == long_desc or not long_desc:
-            text = f"[SBS] {short}"
-        else:
-            text = f"[SBS] {short}. {long_desc}"
-
-        # Get SBS Code (numeric) if available
-        sbs_code_numeric = ""
-        if "SBS Code" in row and pd.notna(row["SBS Code"]):
-            try:
-                sbs_code_numeric = str(int(float(row["SBS Code"])))
-            except (ValueError, TypeError):
-                sbs_code_numeric = str(row["SBS Code"]).strip()
-
-        docs.append(Document(
-            page_content=text,
-            metadata={
-                "code": str(row["SBS Code Hyphenated"]),
-                "code_hyphenated": str(row["SBS Code Hyphenated"]),
-                "code_numeric": sbs_code_numeric,
-                "system": "SBS",
-                "description": short,
-            }
-        ))
-        counts["SBS"] += 1
+        doc = build_enriched_sbs_document(row)
+        if doc:
+            docs.append(doc)
+            counts["SBS"] += 1
 
     # ── GTIN Documents ──
     df_gtin = pd.read_excel(xls, sheet_name="GTIN")
@@ -252,7 +301,7 @@ def create_vector_store(docs: list[Document], persist_dir: str = None) -> Chroma
             # Add subsequent batches to existing vector store
             vector_store.add_documents(batch)
     
-    print(f"✅ Successfully indexed {len(docs)} documents into ChromaDB at '{persist_dir}'")
+    print(f"Successfully indexed {len(docs)} documents into ChromaDB at '{persist_dir}'")
 
     return vector_store
 
@@ -302,14 +351,14 @@ if __name__ == "__main__":
     print("SAUDI BILLING CODE INDEXING")
     print("=" * 60)
     
-    print("\n📖 Building documents from reference file...")
+    print("\nBuilding documents from reference file...")
     docs = build_documents(config.REFERENCE_FILE)
 
-    print(f"\n✅ Built {len(docs)} documents. Sample:")
+    print(f"\nBuilt {len(docs)} documents. Sample:")
     for d in docs[:3]:
         print(f"  {d.page_content[:80]}... | code={d.metadata['code']}")
 
-    print("\n🔨 Creating vector store...")
+    print("\nCreating vector store...")
     vector_store = create_vector_store(docs)
 
     elapsed = time.time() - start_time
@@ -317,11 +366,11 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("INDEXING COMPLETE")
     print("=" * 60)
-    print(f"✅ Vector store saved to: {config.CHROMA_PERSIST_DIR}")
-    print(f"⏱️  Total time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
-    print(f"📊 Speed: {len(docs)/elapsed:.1f} documents/second")
+    print(f"Vector store saved to: {config.CHROMA_PERSIST_DIR}")
+    print(f"Total time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
+    print(f"Speed: {len(docs)/elapsed:.1f} documents/second")
     print("=" * 60)
 
     # Run verification queries
-    print("\n🔍 Running verification queries...")
+    print("\nRunning verification queries...")
     verify_vector_store(vector_store)
