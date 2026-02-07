@@ -7,12 +7,8 @@ A minimal single-page UI with:
 3. Single test match input
 """
 
-# Set environment variable BEFORE any TensorFlow imports to use legacy Keras
 import os
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
-
 import streamlit as st
-import os
 import tempfile
 import json
 import config
@@ -96,16 +92,16 @@ with st.sidebar:
     # Configuration info
     st.subheader("Configuration")
     if config.USE_LOCAL:
-        st.info("Using LOCAL models (no Gemini API key found)")
+        st.info("Using LOCAL models (no AWS credentials found)")
         st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace)")
-        st.caption("LLM: Ollama gemma3:1b")
+        st.caption("LLM: Ollama gemma2:2b")
     else:
-        st.info("Using Google Gemini API")
+        st.info("Using AWS Bedrock")
         st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace - Free)")
         st.caption(f"LLM: {config.LLM_MODEL}")
-
-    st.caption(f"Top-K retrieval: {config.TOP_K}")
-    st.caption(f"Auto-accept threshold: {config.AUTO_ACCEPT_THRESHOLD}")
+        st.caption(f"Region: {config.AWS_REGION}")
+        st.caption(f"Top-K retrieval: {config.TOP_K}")
+        st.caption(f"Auto-accept threshold: {config.AUTO_ACCEPT_THRESHOLD}")
 
 
 # ============== MAIN AREA ==============
@@ -123,10 +119,10 @@ mapping_file = st.file_uploader(
 
 col1, col2 = st.columns([1, 3])
 with col1:
-    use_async = st.checkbox("Use async processing", value=False,
-                            help="Faster but requires more resources")
+    use_async = st.checkbox("Use async processing (Recommended)", value=True,
+                            help="10x faster processing - recommended for all files")
 
-if mapping_file and st.button("Match Codes", type="primary", use_container_width=True):
+if mapping_file and st.button("Match Codes", type="primary", width="stretch"):
     if not check_vector_db_exists():
         st.error("Please index reference data first (see sidebar)")
     else:
@@ -153,8 +149,9 @@ if mapping_file and st.button("Match Codes", type="primary", use_container_width
                 else:
                     results = matcher.match_batch(input_path, output_path)
 
-                st.success("Matching complete!")
-
+                st.success(" Matching complete!")
+                
+               
                 # Show summary stats
                 st.subheader("Summary")
                 for sheet_name, df in results:
@@ -168,7 +165,7 @@ if mapping_file and st.button("Match Codes", type="primary", use_container_width
                         col4.metric("NONE", conf_counts.get("NONE", 0))
 
                         # Preview data
-                        st.dataframe(df.head(10), use_container_width=True)
+                        st.dataframe(df.head(10), width="stretch")
 
                 # Download button
                 with open(output_path, "rb") as f:
@@ -185,8 +182,13 @@ if mapping_file and st.button("Match Codes", type="primary", use_container_width
                 import traceback
                 st.code(traceback.format_exc())
 
-        # Clean up temp file
-        os.unlink(input_path)
+        # Clean up temp file with error handling
+        try:
+            import time
+            time.sleep(0.5)  # Small delay to ensure file is released
+            os.unlink(input_path)
+        except Exception:
+            pass  # Ignore cleanup errors
 
 # ============== Single Test Match Section ==============
 st.divider()

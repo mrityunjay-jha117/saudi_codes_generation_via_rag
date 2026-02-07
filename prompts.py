@@ -69,20 +69,3 @@ def format_candidates(retrieved_docs) -> str:
         lines.append(f"{i}. [{system}] Code: {code} | {content}")
 
     return "\n".join(lines)
-
-
-def build_prompt(service_description: str, candidates_text: str) -> str:
-    """
-    Build the complete prompt for the LLM.
-
-    Args:
-        service_description: The input service description to match.
-        candidates_text: Formatted string of candidate codes from format_candidates().
-
-    Returns:
-        The complete prompt string ready for LLM invocation.
-    """
-    return MATCH_PROMPT.format(
-        service_description=service_description,
-        candidates=candidates_text,
-    )

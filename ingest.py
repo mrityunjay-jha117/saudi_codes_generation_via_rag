@@ -26,8 +26,14 @@ class SentenceTransformerEmbeddings:
         self.model = SentenceTransformer(model_name)
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed a list of documents."""
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
+        """Embed a list of documents with batch processing."""
+        # Use batch processing with progress bar for better performance
+        embeddings = self.model.encode(
+            texts, 
+            convert_to_numpy=True,
+            batch_size=32,  # Optimal batch size for sentence-transformers
+            show_progress_bar=True  # Show progress during embedding
+        )
         return embeddings.tolist()
     
     def embed_query(self, text: str) -> list[float]:
@@ -82,10 +88,20 @@ def build_documents(excel_path: str = None) -> list[Document]:
         else:
             text = f"[SBS] {short}. {long_desc}"
 
+        # Get SBS Code (numeric) if available
+        sbs_code_numeric = ""
+        if "SBS Code" in row and pd.notna(row["SBS Code"]):
+            try:
+                sbs_code_numeric = str(int(float(row["SBS Code"])))
+            except (ValueError, TypeError):
+                sbs_code_numeric = str(row["SBS Code"]).strip()
+
         docs.append(Document(
             page_content=text,
             metadata={
                 "code": str(row["SBS Code Hyphenated"]),
+                "code_hyphenated": str(row["SBS Code Hyphenated"]),
+                "code_numeric": sbs_code_numeric,
                 "system": "SBS",
                 "description": short,
             }
@@ -111,10 +127,15 @@ def build_documents(excel_path: str = None) -> list[Document]:
         # Build document text with [GTIN] prefix
         text = f"[GTIN] {display} - {ingredients} {strength}"
 
-        # Convert CODE to string (it's a large integer)
+        # Convert CODE to string (handle both numeric and text codes)
         code_value = row["CODE"]
         if pd.notna(code_value):
-            code_str = str(int(code_value))
+            try:
+                # Try to convert to int first (for numeric GTIN codes)
+                code_str = str(int(float(code_value)))
+            except (ValueError, TypeError):
+                # If it's already a string or can't be converted, use as-is
+                code_str = str(code_value).strip()
         else:
             code_str = ""
 
@@ -124,6 +145,8 @@ def build_documents(excel_path: str = None) -> list[Document]:
                 "code": code_str,
                 "system": "GTIN",
                 "description": display,
+                "ingredients": ingredients,
+                "strength": strength,
             }
         ))
         counts["GTIN"] += 1
@@ -147,10 +170,15 @@ def build_documents(excel_path: str = None) -> list[Document]:
         # Build document text with [GMDN] prefix
         text = f"[GMDN] {term_name}. {term_def_short}"
 
-        # Convert termCode to string (it's an integer)
+        # Convert termCode to string (handle both numeric and text codes)
         term_code = row["GMDN_termCode"]
         if pd.notna(term_code):
-            code_str = str(int(term_code))
+            try:
+                # Try to convert to int first (for numeric GMDN codes)
+                code_str = str(int(float(term_code)))
+            except (ValueError, TypeError):
+                # If it's already a string or can't be converted, use as-is
+                code_str = str(term_code).strip()
         else:
             code_str = ""
 
@@ -160,6 +188,8 @@ def build_documents(excel_path: str = None) -> list[Document]:
                 "code": code_str,
                 "system": "GMDN",
                 "description": term_name,
+                "term_name": term_name,
+                "term_definition": term_def,
             }
         ))
         counts["GMDN"] += 1
@@ -194,15 +224,35 @@ def create_vector_store(docs: list[Document], persist_dir: str = None) -> Chroma
     # Get embedding function based on config
     embeddings = get_embedding_function()
 
-    # Create vector store from documents
-    vector_store = Chroma.from_documents(
-        documents=docs,
-        embedding=embeddings,
-        collection_name=config.COLLECTION_NAME,
-        persist_directory=persist_dir,
-    )
-
-    print(f"Indexed {len(docs)} documents into ChromaDB at '{persist_dir}'")
+    print(f"\nIndexing {len(docs)} documents into ChromaDB...")
+    print("Using batch processing for optimal performance...")
+    
+    # Create vector store with batch processing for better performance
+    # Process in batches to avoid memory issues and improve speed
+    batch_size = 500  # Optimal batch size for ChromaDB
+    
+    vector_store = None
+    total_batches = (len(docs) + batch_size - 1) // batch_size
+    
+    for i in range(0, len(docs), batch_size):
+        batch = docs[i:i + batch_size]
+        batch_num = (i // batch_size) + 1
+        
+        print(f"  Processing batch {batch_num}/{total_batches} ({len(batch)} documents)...")
+        
+        if vector_store is None:
+            # Create new vector store with first batch
+            vector_store = Chroma.from_documents(
+                documents=batch,
+                embedding=embeddings,
+                collection_name=config.COLLECTION_NAME,
+                persist_directory=persist_dir,
+            )
+        else:
+            # Add subsequent batches to existing vector store
+            vector_store.add_documents(batch)
+    
+    print(f"✅ Successfully indexed {len(docs)} documents into ChromaDB at '{persist_dir}'")
 
     return vector_store
 
@@ -244,17 +294,34 @@ def verify_vector_store(vector_store: Chroma = None):
 
 
 if __name__ == "__main__":
-    print("Building documents from reference file...")
+    import time
+    
+    start_time = time.time()
+    
+    print("=" * 60)
+    print("SAUDI BILLING CODE INDEXING")
+    print("=" * 60)
+    
+    print("\n📖 Building documents from reference file...")
     docs = build_documents(config.REFERENCE_FILE)
 
-    print(f"\nBuilt {len(docs)} documents. Sample:")
+    print(f"\n✅ Built {len(docs)} documents. Sample:")
     for d in docs[:3]:
         print(f"  {d.page_content[:80]}... | code={d.metadata['code']}")
 
-    print("\nCreating vector store...")
+    print("\n🔨 Creating vector store...")
     vector_store = create_vector_store(docs)
 
-    print("\nDone! Vector store saved to", config.CHROMA_PERSIST_DIR)
+    elapsed = time.time() - start_time
+    
+    print("\n" + "=" * 60)
+    print("INDEXING COMPLETE")
+    print("=" * 60)
+    print(f"✅ Vector store saved to: {config.CHROMA_PERSIST_DIR}")
+    print(f"⏱️  Total time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
+    print(f"📊 Speed: {len(docs)/elapsed:.1f} documents/second")
+    print("=" * 60)
 
     # Run verification queries
+    print("\n🔍 Running verification queries...")
     verify_vector_store(vector_store)
