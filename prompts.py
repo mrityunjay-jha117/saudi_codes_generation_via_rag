@@ -1,7 +1,7 @@
 """
-prompts.py - LLM prompt templates for code matching.
+prompts.py - Prompt templates for the Saudi Billing Code Matcher.
 
-Contains the main matching prompt and helper functions for formatting candidates.
+This module contains the LLM prompt template and candidate formatting logic.
 """
 
 MATCH_PROMPT = """You are a Saudi healthcare billing code expert specialized in NPHIES compliance.
@@ -32,11 +32,11 @@ Identify:
 ABBREVIATION SAFETY: If the input contains abbreviations you are not 100% certain about,
 do NOT guess. Look at candidate context for clues. If still uncertain, return null.
 
-## STEP 2: EVALUATE EACH CANDIDATE — All 6 checks + metadata
+## STEP 2: EVALUATE EACH CANDIDATE — All checks + metadata
 
 USE THE CANDIDATE METADATA — each candidate may include Specialty, Category,
 Clinical Context, Excludes, and Includes fields. These are from the official SBS
-coding reference and are authoritative.
+reference and are authoritative.
 
 CHECK 1 — DOMAIN: Compare input domain to the candidate's Specialty/Chapter field.
   Reject if they describe completely different body systems or clinical domains.

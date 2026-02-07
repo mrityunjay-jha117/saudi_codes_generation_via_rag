@@ -9,79 +9,42 @@ import re
 
 
 # ── Abbreviation → Expansion Map ──
-# Keys: customer shorthand (lowercase)
-# Values: expanded SBS terminology to append to the search query
+# ONLY include abbreviations that are:
+# 1. Ambiguous or domain-specific
+# 2. Not obvious from context
+# 3. Critical for retrieval accuracy
 SBS_VOCABULARY_MAP = {
-    # Dental - Endodontic
+    # Dental - Critical abbreviations only
     "rct":              "root canal treatment endodontic",
     "r.c.t.":           "root canal treatment endodontic",
-    "r.c.t":             "root canal treatment endodontic",
-    "re-rct":           "root canal retreatment endodontic revision",
-    "re rct":           "root canal retreatment endodontic revision",
-    "pulpotomy":        "pulp therapy endodontic",
-    "pulpectomy":       "pulp removal endodontic",
-
-    # Dental - Prosthodontic
-    "pfm":              "porcelain fused to metal crown metallic substructure fixed prosthodontic",
-    "pfm crown":        "porcelain fused to metal crown metallic substructure fixed prosthodontic",
-    "zirconia crown":   "zirconia all-ceramic crown fixed prosthodontic",
-    "e-max":            "lithium disilicate all-ceramic crown fixed prosthodontic",
-    "emax":             "lithium disilicate all-ceramic crown fixed prosthodontic",
-    "rpd":              "removable partial denture prosthodontic",
-    "fpd":              "fixed partial denture bridge prosthodontic",
-
-    # Dental - Restorative
-    "composite":        "composite resin direct restoration restorative",
-    "amalgam":          "amalgam metallic restoration direct restorative",
-    "tooth colored":    "composite resin direct restoration restorative",
-    "tooth-colored":    "composite resin direct restoration restorative",
-    "tooth colour":     "composite resin direct restoration restorative",
-    "filling":          "dental restoration direct restorative",
-    "surface":          "dental restoration surface restorative",
-
-    # Dental - Radiograph
-    "opg":              "orthopantomogram panoramic dental radiograph imaging",
-    "iopa":             "intraoral periapical radiograph dental imaging",
-    "pa":               "periapical radiograph dental imaging",
-    "bitewing":         "bitewing radiograph dental imaging",
-    "cbct":             "cone beam computed tomography dental imaging",
-
-    # Dental - General
-    "extraction":       "tooth extraction dental surgery oral",
-    "impaction":        "impacted tooth extraction surgical dental",
-    "scaling":          "dental scaling prophylaxis periodontal cleaning",
-    "tmj":              "temporomandibular joint",
-    "gingival":         "gingival periodontal gum",
-    "veneer":           "dental veneer laminate cosmetic",
-    "implant":          "dental implant endosseous",
-    "denture":          "dental prosthesis denture prosthodontic",
-
-    # Medical - General
-    "cbc":              "complete blood count hematology laboratory",
-    "ecg":              "electrocardiogram cardiac heart diagnostic",
-    "ekg":              "electrocardiogram cardiac heart diagnostic",
-    "eeg":              "electroencephalogram brain neurological diagnostic",
-    "mri":              "magnetic resonance imaging diagnostic radiology",
-    "ct":               "computed tomography imaging diagnostic radiology",
-    "ct scan":          "computed tomography imaging diagnostic radiology",
-    "xray":             "radiograph x-ray imaging diagnostic",
-    "x-ray":            "radiograph x-ray imaging diagnostic",
+    "r.c.t":            "root canal treatment endodontic",
+    "pfm":              "porcelain fused to metal crown",
+    "rpd":              "removable partial denture",
+    "fpd":              "fixed partial denture bridge",
+    
+    # Dental - Imaging abbreviations
+    "opg":              "orthopantomogram panoramic radiograph",
+    "iopa":             "intraoral periapical radiograph",
+    "cbct":             "cone beam computed tomography",
+    
+    # Medical - Common abbreviations
+    "cbc":              "complete blood count",
+    "ecg":              "electrocardiogram",
+    "ekg":              "electrocardiogram",
+    "mri":              "magnetic resonance imaging",
+    "ct":               "computed tomography",
     "ent":              "ear nose throat otolaryngology",
-    "cabg":             "coronary artery bypass graft cardiac surgery",
-
-    # Medical - Procedures
-    "lumbar puncture":  "spinal tap cranial puncture cerebrospinal fluid",
-    "spinal tap":       "lumbar puncture cranial tap cerebrospinal fluid",
-
-    # Pharmaceutical
-    "tab":              "tablet oral dosage form",
-    "cap":              "capsule oral dosage form",
-    "inj":              "injection parenteral",
-    "susp":             "suspension oral liquid dosage form",
-    "syr":              "syrup oral liquid dosage form",
-    "iv":               "intravenous injection parenteral",
-    "im":               "intramuscular injection parenteral",
-    "sc":               "subcutaneous injection parenteral",
+    "cabg":             "coronary artery bypass graft",
+    
+    # Pharmaceutical - Dosage forms
+    "tab":              "tablet",
+    "cap":              "capsule",
+    "inj":              "injection",
+    "susp":             "suspension",
+    "syr":              "syrup",
+    "iv":               "intravenous",
+    "im":               "intramuscular",
+    "sc":               "subcutaneous",
 }
 
 

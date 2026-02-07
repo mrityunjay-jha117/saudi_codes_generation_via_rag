@@ -375,17 +375,17 @@ class CodeMatcher:
         """
         result = None
         
-        # DEBUG: Print raw response to see what we're getting
-        print("\n" + "="*60)
-        print("DEBUG: Raw LLM Response:")
-        print("-"*60)
-        print(response_text[:500] if response_text else "EMPTY RESPONSE")
-        print("="*60 + "\n")
+        # DEBUG: Uncomment these lines if you need to troubleshoot LLM responses
+        # print("\n" + "="*60)
+        # print("DEBUG: Raw LLM Response:")
+        # print("-"*60)
+        # print(response_text[:500] if response_text else "EMPTY RESPONSE")
+        # print("="*60 + "\n")
         
         try:
             result = json.loads(response_text)
         except json.JSONDecodeError as e:
-            print(f"DEBUG: Initial JSON parse failed: {e}")
+            # print(f"DEBUG: Initial JSON parse failed: {e}")
             # Fallback: try stripping markdown code fences
             cleaned = response_text.strip()
             if cleaned.startswith("```json"):
@@ -398,20 +398,21 @@ class CodeMatcher:
 
             try:
                 result = json.loads(cleaned)
-                print("DEBUG: Successfully parsed after cleaning markdown fences")
+                # print("DEBUG: Successfully parsed after cleaning markdown fences")
             except json.JSONDecodeError as e2:
-                print(f"DEBUG: Cleaned JSON parse also failed: {e2}")
-                print(f"DEBUG: Cleaned text (first 200 chars): {cleaned[:200]}")
+                # print(f"DEBUG: Cleaned JSON parse also failed: {e2}")
+                # print(f"DEBUG: Cleaned text (first 200 chars): {cleaned[:200]}")
+                pass
 
         # If parsing failed, use fallback
         if result is None:
-            print("DEBUG: Using fallback (vector similarity)")
+            # print("DEBUG: Using fallback (vector similarity)")
             result = self._extract_metadata(fallback_doc)
             result["confidence"] = "LOW"
             result["reasoning"] = "LLM response parsing failed; using vector similarity"
             return result
         
-        print(f"DEBUG: Successfully parsed JSON. Matched code: {result.get('matched_code')}")
+        # print(f"DEBUG: Successfully parsed JSON. Matched code: {result.get('matched_code')}")
         
         # Enrich the LLM result with system-specific fields by matching against candidates
         if candidates and result.get("matched_code"):
