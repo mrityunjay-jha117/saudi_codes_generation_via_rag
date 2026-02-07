@@ -16,7 +16,7 @@ USE_LOCAL = (AWS_ACCESS_KEY_ID is None or AWS_ACCESS_KEY_ID.strip() == "" or
 
 
 # Retrieval
-TOP_K = 5  # Reduced from 10 for faster retrieval (optimized)
+TOP_K = 10  # Increased to 10 for better recall
 CHROMA_PERSIST_DIR = "./chroma_db"
 COLLECTION_NAME = "saudi_billing_codes"
 
