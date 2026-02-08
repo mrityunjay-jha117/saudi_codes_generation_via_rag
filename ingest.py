@@ -45,7 +45,7 @@ class SentenceTransformerEmbeddings:
 def get_embedding_function():
     """Get the appropriate embedding function based on config."""
     # Use sentence-transformers directly (PyTorch-based, no Keras/TensorFlow)
-    return SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    return SentenceTransformerEmbeddings(model_name="all-mpnet-base-v2")
 
 
 def clean_field(value) -> str:
@@ -56,6 +56,60 @@ def clean_field(value) -> str:
     if s.lower() in ("nan", "none", ""):
         return ""
     return s
+
+
+def build_sbs_synonym_documents(csv_path: str) -> list[Document]:
+    """
+    Build documents from SBS synonyms CSV file.
+    Each row contains an SBS code with a generated synonym description.
+    
+    Args:
+        csv_path: Path to the sbs.csv file with SBS_Code and Generated_Description columns.
+    
+    Returns:
+        List of Document objects for synonym entries.
+    """
+    docs = []
+    
+    try:
+        df = pd.read_csv(csv_path)
+        print(f"Loading SBS synonyms from {csv_path}...")
+        
+        for _, row in df.iterrows():
+            code = clean_field(row.get("SBS_Code"))
+            description = clean_field(row.get("Generated_Description"))
+            
+            if not code or not description:
+                continue
+            
+            # Build page_content with [SBS-SYNONYM] prefix to distinguish from main entries
+            page_content = f"[SBS-SYNONYM] Code: {code}. Synonym: {description}"
+            
+            # Build metadata
+            metadata = {
+                "code": code,
+                "code_hyphenated": code,
+                "code_numeric": "",
+                "system": "SBS",
+                "description": description,
+                "chapter_name": "",
+                "chapter_number": -1,
+                "block_name": "",
+                "block_number": "",
+                "has_excludes": False,
+                "has_includes": False,
+                "has_clinical_explanation": False,
+                "is_synonym": True,  # Flag to identify synonym entries
+            }
+            
+            docs.append(Document(page_content=page_content, metadata=metadata))
+    
+    except FileNotFoundError:
+        print(f"Warning: SBS synonyms file not found at {csv_path}, skipping synonyms")
+    except Exception as e:
+        print(f"Warning: Error loading SBS synonyms: {e}, skipping synonyms")
+    
+    return docs
 
 
 def build_enriched_sbs_document(row: pd.Series) -> Document | None:
@@ -128,12 +182,13 @@ def build_enriched_sbs_document(row: pd.Series) -> Document | None:
     return Document(page_content=page_content, metadata=metadata)
 
 
-def build_documents(excel_path: str = None) -> list[Document]:
+def build_documents(excel_path: str = None, synonyms_path: str = None) -> list[Document]:
     """
     Read reference Excel and build LangChain Documents.
 
     Args:
         excel_path: Path to the reference Excel file. Defaults to config.REFERENCE_FILE.
+        synonyms_path: Optional path to the SBS synonyms CSV file.
 
     Returns:
         List of LangChain Document objects ready for embedding.
@@ -156,6 +211,24 @@ def build_documents(excel_path: str = None) -> list[Document]:
         if doc:
             docs.append(doc)
             counts["SBS"] += 1
+
+    # ── SBS Synonyms (from CSV file) ──
+    if synonyms_path:
+        synonym_docs = build_sbs_synonym_documents(synonyms_path)
+        if synonym_docs:
+            docs.extend(synonym_docs)
+            counts["SBS"] += len(synonym_docs)
+            print(f"Added {len(synonym_docs)} SBS synonym entries")
+    else:
+        # Fallback to default path if not provided but exists
+        default_syn_path = "./data/input/sbs.csv"
+        if os.path.exists(default_syn_path):
+             print(f"No synonyms path provided, checking default: {default_syn_path}")
+             synonym_docs = build_sbs_synonym_documents(default_syn_path)
+             if synonym_docs:
+                docs.extend(synonym_docs)
+                counts["SBS"] += len(synonym_docs)
+                print(f"Added {len(synonym_docs)} SBS synonym entries from default path")
 
     # ── GTIN Documents ──
     df_gtin = pd.read_excel(xls, sheet_name="GTIN")

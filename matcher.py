@@ -27,7 +27,7 @@ class CodeMatcher:
 
     def __init__(self):
         """Load vector store and LLM based on configuration."""
-        self.embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+        self.embeddings = SentenceTransformerEmbeddings(model_name="all-mpnet-base-v2")
 
         # Load vector store from persistent directory
         self.vector_store = Chroma(
@@ -358,6 +358,15 @@ class CodeMatcher:
             result = self._post_validate(result, service_description, docs)
 
         # Cache and return
+        result["candidates"] = [
+            {
+                "code": doc.metadata.get("code"),
+                "system": doc.metadata.get("system"),
+                "description": doc.metadata.get("description"),
+                "score": doc.metadata.get("score", "N/A") 
+            } 
+            for doc in docs
+        ]
         self.cache[cache_key] = result
         return result
 
@@ -761,7 +770,7 @@ class CodeMatcher:
         stats = {}
 
         # Semaphore to limit concurrent requests (reduced to avoid rate limiting)
-        semaphore = asyncio.Semaphore(2)  # Only 2 concurrent requests to AWS Bedrock
+        semaphore = asyncio.Semaphore(1)  # Only 1 concurrent request to AWS Bedrock
 
         async def match_single_async(desc: str) -> dict:
             """Async wrapper for match_single with rate limiting."""
@@ -770,7 +779,7 @@ class CodeMatcher:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, self.match_single, desc)
                 # Delay to avoid overwhelming the API
-                await asyncio.sleep(1.0)  # 1 second delay between requests
+                await asyncio.sleep(5.0)  # 5 second delay between requests
                 return result
 
         for sheet_name in xls.sheet_names:

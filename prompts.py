@@ -131,7 +131,7 @@ def format_candidates(retrieved_docs) -> str:
         content = doc.page_content
 
         # Strip the system prefix since we add it in the format below
-        for prefix in ["[SBS] ", "[GTIN] ", "[GMDN] "]:
+        for prefix in ["[SBS] ", "[GTIN] ", "[GMDN] ", "[SBS-SYNONYM] "]:
             if content.startswith(prefix):
                 content = content[len(prefix):]
                 break

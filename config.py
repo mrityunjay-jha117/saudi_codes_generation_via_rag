@@ -6,7 +6,7 @@ load_dotenv()
 # LLM & Embedding - AWS Bedrock Configuration
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-LLM_MODEL = "anthropic.claude-3-haiku-20240307-v1:0" 
+LLM_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0" 
 LLM_TEMPERATURE = 0.0
 
 # If set to true, force usage of local Ollama model
@@ -24,7 +24,7 @@ COLLECTION_NAME = "saudi_billing_codes"
 # Two-pass retrieval
 TOP_K_GENERAL = 15          # Candidates from general (unfiltered) search
 TOP_K_FILTERED = 15         # Candidates from specialty-filtered search
-MAX_CANDIDATES_TO_LLM = 20  # Max merged candidates sent to the LLM
+MAX_CANDIDATES_TO_LLM = 10  # Reduce to save tokens and avoid rate limits
 
 # Query expansion
 ENABLE_QUERY_EXPANSION = True   # Toggle abbreviation expansion

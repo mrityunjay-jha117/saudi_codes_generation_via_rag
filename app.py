@@ -56,21 +56,39 @@ with st.sidebar:
 
     # Reference file uploader
     ref_file = st.file_uploader(
-        "Upload Saudi Billing Codes Excel",
+        "1. Upload Reference Excel (SBS/GTIN/GMDN)",
         type=["xlsx"],
+        key="ref_excel",
         help="The reference file containing SBS, GTIN, and GMDN codes"
     )
 
+    # Synonyms file uploader
+    syn_file = st.file_uploader(
+        "2. Upload SBS Synonyms CSV (Optional)",
+        type=["csv"],
+        key="syn_csv",
+        help="The CSV file containing SBS code synonyms"
+    )
+
     if ref_file and st.button("Index Reference Data", type="primary"):
+        # Save reference Excel
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             f.write(ref_file.read())
             ref_path = f.name
+            
+        # Save synonyms CSV if provided
+        syn_path = None
+        if syn_file:
+            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+                f.write(syn_file.read())
+                syn_path = f.name
 
         with st.spinner("Building vector index..."):
             try:
                 from ingest import build_documents, create_vector_store
 
-                docs = build_documents(ref_path)
+                # Pass both paths to build_documents
+                docs = build_documents(excel_path=ref_path, synonyms_path=syn_path)
                 create_vector_store(docs)
 
                 st.success(f"Indexed {len(docs)} codes!")
@@ -81,11 +99,14 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error indexing: {str(e)}")
             finally:
-                # Clean up temp file (with error handling)
+                # Clean up temp files
                 try:
-                    os.unlink(ref_path)
+                    if os.path.exists(ref_path):
+                        os.unlink(ref_path)
+                    if syn_path and os.path.exists(syn_path):
+                        os.unlink(syn_path)
                 except Exception:
-                    pass  # Ignore if file is still in use
+                    pass
 
     st.divider()
 
