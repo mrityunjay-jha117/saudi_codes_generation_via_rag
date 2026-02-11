@@ -7,8 +7,6 @@ Contains the CodeMatcher class that:
 3. Parses the structured JSON response
 """
 
-
-
 import json
 import time
 import asyncio
@@ -800,112 +798,104 @@ class CodeMatcher:
             all_results.append((sheet_name, df))
             stats[sheet_name] = sheet_stats
 
-        # Combine all results and separate by code system
+        # Combine all results
         from openpyxl.styles import PatternFill
-        
+
         # Combine all dataframes
         all_dfs = [df for _, df in all_results]
+        if not all_dfs:
+            print("No data to save.")
+            return all_results
+            
         combined_df = pd.concat(all_dfs, ignore_index=True)
         
+        # --- Map columns to standardized output structure ---
+        def get_service_type(row):
+            sys = str(row.get("Code System", "")).strip()
+            conf = str(row.get("Confidence", "")).upper()
+            code = str(row.get("Matched Code", "")).strip()
+            
+            if not sys or conf == "NONE" or not code or sys.lower() == "nan":
+                return "undefined"
+            return sys
+
+        def get_nphies_code(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("SBS Code", "")
+            if sys == "GTIN": return row.get("GTIN Code", "")
+            if sys == "GMDN": return row.get("GMDN Code", "")
+            return ""
+
+        def get_description(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("Short Description", "")
+            if sys == "GTIN": return row.get("GTIN Ingredients", "")
+            if sys == "GMDN": return row.get("GMDN Name", "")
+            return ""
+
+        def get_other_value(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("SBS Code Hyphenated", "")
+            if sys == "GTIN": return row.get("GTIN Strength", "")
+            if sys == "GMDN": return row.get("GMDN Definition", "")
+            return ""
+
+        combined_df["service type"] = combined_df.apply(get_service_type, axis=1)
+        combined_df["NPHIES Code"] = combined_df.apply(get_nphies_code, axis=1)
+        combined_df["Description"] = combined_df.apply(get_description, axis=1)
+        combined_df["Other Code Value"] = combined_df.apply(get_other_value, axis=1)
+        combined_df["Confidence"] = combined_df.get("Confidence", "")
+        combined_df["Reason"] = combined_df.get("Reasoning", "")
         
-        # Separate by code system
-        df_sbs = combined_df[combined_df["Code System"] == "SBS"].copy()
-        df_gtin = combined_df[combined_df["Code System"] == "GTIN"].copy()
-        df_gmdn = combined_df[combined_df["Code System"] == "GMDN"].copy()
+        # Define output columns
+        output_cols = [
+            "Service Code", 
+            "Service Description", 
+            "service type", 
+            "NPHIES Code", 
+            "Description", 
+            "Other Code Value", 
+            "Confidence", 
+            "Reason"
+        ]
         
-        # Filter Unmatched (Robust check)
-        # Convert to string and upper case to handle variations
-        combined_df["Confidence_Str"] = combined_df["Confidence"].astype(str).str.upper().str.strip()
+        # Ensure columns exist
+        for col in output_cols:
+            if col not in combined_df.columns:
+                combined_df[col] = ""
+                
+        # Filter to only the requested columns
+        combined_df = combined_df[output_cols]
         
-        print("[DEBUG] Confidence Distribution:")
-        print(combined_df["Confidence_Str"].value_counts())
-        print("[DEBUG] Sample Data (Confidence, Matched Code):")
-        print(combined_df[["Confidence", "Matched Code"]].head(20))
+        # Styling
+        yellow_fill = PatternFill(start_color="#FACC15", end_color="#FACC15", fill_type="solid")
+        red_fill = PatternFill(start_color="#F87171", end_color="#F87171", fill_type="solid")
         
-        df_unmatched = combined_df[
-            (combined_df["Confidence_Str"] == "NONE") | 
-            (combined_df["Confidence_Str"] == "NAN") |
-            (combined_df["Confidence_Str"] == "") |
-            (combined_df["Matched Code"].isnull()) |
-            (combined_df["Matched Code"] == "") |
-            (combined_df["Code System"].isnull()) | 
-            (combined_df["Code System"] == "")
-        ].copy()
-        
-        print(f"\n[DEBUG] Found {len(df_unmatched)} unmatched rows.")
-        
-        # Yellow fill for highlighting
-        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        
-        # Write to single Excel file with 3 sheets
+        # Write to single Excel file
         with pd.ExcelWriter(output_excel_path, engine="openpyxl") as writer:
-            # Write SBS sheet
-            if not df_sbs.empty:
-                sbs_cols = ["Service Code", "Service Description", 
-                           "SBS Code", "Short Description", "SBS Code Hyphenated",
-                           "Confidence", "Reasoning"]
-                df_sbs_output = df_sbs[[col for col in sbs_cols if col in df_sbs.columns]]
-                df_sbs_output.to_excel(writer, sheet_name="SBS", index=False)
-                
-                # Apply yellow highlighting
-                ws = writer.sheets["SBS"]
-                for row in range(2, len(df_sbs_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # SBS Code
-                    ws.cell(row=row, column=4).fill = yellow_fill  # Short Description
-                    ws.cell(row=row, column=5).fill = yellow_fill  # SBS Code Hyphenated
+            combined_df.to_excel(writer, sheet_name="Matched Results", index=False)
             
-            # Write GTIN sheet
-            if not df_gtin.empty:
-                gtin_cols = ["Service Code", "Service Description",
-                            "GTIN Code", "GTIN Ingredients", "GTIN Strength",
-                            "Confidence", "Reasoning"]
-                df_gtin_output = df_gtin[[col for col in gtin_cols if col in df_gtin.columns]]
-                df_gtin_output.to_excel(writer, sheet_name="GTIN", index=False)
-                
-                # Apply yellow highlighting
-                ws = writer.sheets["GTIN"]
-                for row in range(2, len(df_gtin_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # GTIN Code
-                    ws.cell(row=row, column=4).fill = yellow_fill  # GTIN Ingredients
-                    ws.cell(row=row, column=5).fill = yellow_fill  # GTIN Strength
+            # Apply styling
+            ws = writer.sheets["Matched Results"]
             
-            # Write GMDN sheet
-            if not df_gmdn.empty:
-                gmdn_cols = ["Service Code", "Service Description",
-                            "GMDN Code", "GMDN Name", "GMDN Definition",
-                            "Confidence", "Reasoning"]
-                df_gmdn_output = df_gmdn[[col for col in gmdn_cols if col in df_gmdn.columns]]
-                df_gmdn_output.to_excel(writer, sheet_name="GMDN", index=False)
+            # Columns to highlight (1-based index)
+            # 4: NPHIES Code
+            # 5: Description
+            # 6: Other Code Value
+            highlight_cols = [4, 5, 6]
+            
+            for row in range(2, len(combined_df) + 2):
+                # Check 'service type' value (3rd column)
+                cell_value = ws.cell(row=row, column=3).value
                 
-                # Apply yellow highlighting
-                ws = writer.sheets["GMDN"]
-                for row in range(2, len(df_gmdn_output) + 2):
-                    ws.cell(row=row, column=4).fill = yellow_fill  # GMDN Name
-                    ws.cell(row=row, column=5).fill = yellow_fill  # GMDN Definition
-
-            # Write UNMATCHED sheet
-            if not df_unmatched.empty:
-                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
-                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
-                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
-                # Red fill for unmatched
-                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-                if "UNMATCHED" in writer.sheets:
-                    ws = writer.sheets["UNMATCHED"]
-                    for row in range(2, len(df_unmatched_output) + 2):
-                         ws.cell(row=row, column=1).fill = red_fill
-
-            # Write UNMATCHED sheet
-            if not df_unmatched.empty:
-                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
-                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
-                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
-                # Red fill for unmatched
-                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-                if "UNMATCHED" in writer.sheets:
-                    ws = writer.sheets["UNMATCHED"]
-                    for row in range(2, len(df_unmatched_output) + 2):
-                         ws.cell(row=row, column=1).fill = red_fill
+                if str(cell_value).lower() == "undefined":
+                    # Color entire row Red
+                    for col_idx in range(1, len(output_cols) + 1):
+                        ws.cell(row=row, column=col_idx).fill = red_fill
+                else:
+                    # Color specific columns Yellow
+                    for col_idx in highlight_cols:
+                        ws.cell(row=row, column=col_idx).fill = yellow_fill
 
         print(f"\nResults saved to {output_excel_path}")
 
@@ -1057,96 +1047,104 @@ class CodeMatcher:
 
             print(f"  Completed {len(df)} rows")
 
-        # Combine all results and separate by code system
+        # Combine all results
         from openpyxl.styles import PatternFill
-        
+
         # Combine all dataframes
         all_dfs = [df for _, df in all_results]
+        if not all_dfs:
+            print("No data to save.")
+            return all_results
+            
         combined_df = pd.concat(all_dfs, ignore_index=True)
         
-        # Separate by code system
-        # Separate by code system
-        df_sbs = combined_df[combined_df["Code System"] == "SBS"].copy()
-        df_gtin = combined_df[combined_df["Code System"] == "GTIN"].copy()
-        df_gmdn = combined_df[combined_df["Code System"] == "GMDN"].copy()
-        
-        # Filter Unmatched (Robust)
-        combined_df["Confidence_Str"] = combined_df["Confidence"].astype(str).str.upper().str.strip()
-        
-        print("[DEBUG ASYNC] Confidence Distribution:")
-        print(combined_df["Confidence_Str"].value_counts())
-        
-        df_unmatched = combined_df[
-            (combined_df["Confidence_Str"] == "NONE") | 
-            (combined_df["Confidence_Str"] == "NAN") |
-            (combined_df["Confidence_Str"] == "") |
-            (combined_df["Matched Code"].isnull()) |
-            (combined_df["Matched Code"] == "") |
-            (combined_df["Code System"].isnull()) | 
-            (combined_df["Code System"] == "")
-        ].copy()
-        
-        # Yellow fill for highlighting
-        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        
-        # Write to single Excel file with 3 sheets
-        with pd.ExcelWriter(output_excel_path, engine="openpyxl") as writer:
-            # Write SBS sheet
-            if not df_sbs.empty:
-                sbs_cols = ["Service Code", "Service Description", 
-                           "SBS Code", "Short Description", "SBS Code Hyphenated",
-                           "Confidence", "Reasoning"]
-                df_sbs_output = df_sbs[[col for col in sbs_cols if col in df_sbs.columns]]
-                df_sbs_output.to_excel(writer, sheet_name="SBS", index=False)
-                
-                # Apply yellow highlighting
-                ws = writer.sheets["SBS"]
-                for row in range(2, len(df_sbs_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # SBS Code
-                    ws.cell(row=row, column=4).fill = yellow_fill  # Short Description
-                    ws.cell(row=row, column=5).fill = yellow_fill  # SBS Code Hyphenated
+        # --- Map columns to standardized output structure ---
+        def get_service_type(row):
+            sys = str(row.get("Code System", "")).strip()
+            conf = str(row.get("Confidence", "")).upper()
+            code = str(row.get("Matched Code", "")).strip()
             
-            # Write GTIN sheet
-            if not df_gtin.empty:
-                gtin_cols = ["Service Code", "Service Description",
-                            "GTIN Code", "GTIN Ingredients", "GTIN Strength",
-                            "Confidence", "Reasoning"]
-                df_gtin_output = df_gtin[[col for col in gtin_cols if col in df_gtin.columns]]
-                df_gtin_output.to_excel(writer, sheet_name="GTIN", index=False)
-                
-                # Apply yellow highlighting
-                ws = writer.sheets["GTIN"]
-                for row in range(2, len(df_gtin_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # GTIN Code
-                    ws.cell(row=row, column=4).fill = yellow_fill  # GTIN Ingredients
-                    ws.cell(row=row, column=5).fill = yellow_fill  # GTIN Strength
-            
-            # Write GMDN sheet
-            if not df_gmdn.empty:
-                gmdn_cols = ["Service Code", "Service Description",
-                            "GMDN Code", "GMDN Name", "GMDN Definition",
-                            "Confidence", "Reasoning"]
-                df_gmdn_output = df_gmdn[[col for col in gmdn_cols if col in df_gmdn.columns]]
-                df_gmdn_output.to_excel(writer, sheet_name="GMDN", index=False)
-                
-                # Apply yellow highlighting
-                ws = writer.sheets["GMDN"]
-                for row in range(2, len(df_gmdn_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # GMDN Code
-                    ws.cell(row=row, column=4).fill = yellow_fill  # GMDN Name
-                    ws.cell(row=row, column=5).fill = yellow_fill  # GMDN Definition
+            if not sys or conf == "NONE" or not code or sys.lower() == "nan":
+                return "undefined"
+            return sys
 
-            # Write UNMATCHED sheet
-            if not df_unmatched.empty:
-                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
-                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
-                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
-                # Red fill for unmatched
-                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-                if "UNMATCHED" in writer.sheets:
-                    ws = writer.sheets["UNMATCHED"]
-                    for row in range(2, len(df_unmatched_output) + 2):
-                         ws.cell(row=row, column=1).fill = red_fill
+        def get_nphies_code(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("SBS Code", "")
+            if sys == "GTIN": return row.get("GTIN Code", "")
+            if sys == "GMDN": return row.get("GMDN Code", "")
+            return ""
+
+        def get_description(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("Short Description", "")
+            if sys == "GTIN": return row.get("GTIN Ingredients", "")
+            if sys == "GMDN": return row.get("GMDN Name", "")
+            return ""
+
+        def get_other_value(row):
+            sys = str(row.get("Code System", "")).upper()
+            if sys == "SBS": return row.get("SBS Code Hyphenated", "")
+            if sys == "GTIN": return row.get("GTIN Strength", "")
+            if sys == "GMDN": return row.get("GMDN Definition", "")
+            return ""
+
+        combined_df["service type"] = combined_df.apply(get_service_type, axis=1)
+        combined_df["NPHIES Code"] = combined_df.apply(get_nphies_code, axis=1)
+        combined_df["Description"] = combined_df.apply(get_description, axis=1)
+        combined_df["Other Code Value"] = combined_df.apply(get_other_value, axis=1)
+        combined_df["Confidence"] = combined_df.get("Confidence", "")
+        combined_df["Reason"] = combined_df.get("Reasoning", "")
+        
+        # Define output columns
+        output_cols = [
+            "Service Code", 
+            "Service Description", 
+            "service type", 
+            "NPHIES Code", 
+            "Description", 
+            "Other Code Value", 
+            "Confidence", 
+            "Reason"
+        ]
+        
+        # Ensure columns exist
+        for col in output_cols:
+            if col not in combined_df.columns:
+                combined_df[col] = ""
+                
+        # Filter to only the requested columns
+        combined_df = combined_df[output_cols]
+        
+        # Styling
+        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+        
+        # Write to single Excel file
+        with pd.ExcelWriter(output_excel_path, engine="openpyxl") as writer:
+            combined_df.to_excel(writer, sheet_name="Matched Results", index=False)
+            
+            # Apply styling
+            ws = writer.sheets["Matched Results"]
+            
+            # Columns to highlight (1-based index)
+            # 4: NPHIES Code
+            # 5: Description
+            # 6: Other Code Value
+            highlight_cols = [4, 5, 6]
+            
+            for row in range(2, len(combined_df) + 2):
+                # Check 'service type' value (3rd column)
+                cell_value = ws.cell(row=row, column=3).value
+                
+                if str(cell_value).lower() == "undefined":
+                    # Color entire row Red
+                    for col_idx in range(1, len(output_cols) + 1):
+                        ws.cell(row=row, column=col_idx).fill = red_fill
+                else:
+                    # Color specific columns Yellow
+                    for col_idx in highlight_cols:
+                        ws.cell(row=row, column=col_idx).fill = yellow_fill
 
         print(f"\nResults saved to {output_excel_path}")
 
