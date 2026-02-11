@@ -7,60 +7,46 @@ Contains the CodeMatcher class that:
 3. Parses the structured JSON response
 """
 
-# Set environment variable BEFORE any TensorFlow imports to use legacy Keras
-import os
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
 
 import json
 import time
 import asyncio
 import pandas as pd
-from langchain_chroma import Chroma
 import config
-from prompts import MATCH_PROMPT, format_candidates
-from query_expansion import expand_query, detect_specialty
-from ingest import SentenceTransformerEmbeddings
+from prompts import MATCH_PROMPT, NORMALIZATION_PROMPT, format_candidates
 
+from pinecone import Pinecone
 
 class CodeMatcher:
     """RAG-based code matching engine."""
 
     def __init__(self):
         """Load vector store and LLM based on configuration."""
-        self.embeddings = SentenceTransformerEmbeddings(model_name="all-mpnet-base-v2")
+        
+        # Initialize Pinecone
+        self.pc = Pinecone(api_key=config.PINECONE_API_KEY)
+        self.index = self.pc.Index(config.PINECONE_INDEX_NAME)
 
-        # Load vector store from persistent directory
-        self.vector_store = Chroma(
-            collection_name=config.COLLECTION_NAME,
-            persist_directory=config.CHROMA_PERSIST_DIR,
-            embedding_function=self.embeddings,
+        # Initialize LLM (AWS Bedrock)
+        import boto3
+        from botocore.config import Config
+        
+        # Configure retry strategy
+        boto_config = Config(
+            retries={
+                'max_attempts': 5,
+                'mode': 'adaptive'
+            }
         )
-
-        # Initialize LLM
-        if config.USE_LOCAL:
-            from langchain_community.llms import Ollama
-            self.llm = Ollama(model="gemma2:2b", temperature=config.LLM_TEMPERATURE)
-            self.use_boto = False
-        else:
-            # Use AWS Bedrock via Boto3 SDK
-            import boto3
-            from botocore.config import Config
-            
-            # Configure retry strategy
-            boto_config = Config(
-                retries={
-                    'max_attempts': 5,
-                    'mode': 'adaptive'
-                }
-            )
-            
-            self.bedrock_client = boto3.client(
-                service_name="bedrock-runtime",
-                region_name=config.AWS_REGION,
-                config=boto_config
-            )
-            self.llm_model_id = config.LLM_MODEL
-            self.use_boto = True
+        
+        self.bedrock_client = boto3.client(
+            service_name="bedrock-runtime",
+            region_name=config.AWS_REGION,
+            config=boto_config
+        )
+        self.llm_model_id = config.LLM_MODEL
+        self.use_boto = True
         
         # Initialize cache for performance optimization
         self.cache = {}
@@ -115,56 +101,194 @@ class CodeMatcher:
             "hit_rate": f"{hit_rate:.1f}%"
         }
 
-    def retrieve_candidates(self, service_description: str) -> list:
+    def normalize_query(self, user_input: str) -> dict:
         """
-        Two-pass retrieval: general similarity + specialty-filtered search.
-        Merges and deduplicates results for maximum recall with precision.
-
-        Pass 1: General semantic search across ALL codes (unfiltered)
-        Pass 2: If a specialty is detected, search WITHIN that specialty only
-
-        Args:
-            service_description: The (possibly expanded) service description.
-
-        Returns:
-            Deduplicated list of candidate Documents.
+        Normalize user input using LLM to get standardized query and domain guess.
         """
-        # Pass 1: General search
-        general_results = self.vector_store.similarity_search(
-            service_description,
-            k=config.TOP_K_GENERAL if hasattr(config, 'TOP_K_GENERAL') else config.TOP_K,
-        )
+        prompt = NORMALIZATION_PROMPT.format(service_description=user_input)
+        
+        response_text = None
+        # Call LLM (reuse existing LLM logic or simplify)
+        if self.use_boto:
+             payload = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+                "temperature": getattr(config, "NORMALIZATION_LLM_TEMPERATURE", 0.0)
+            }
+             try:
+                model_id = getattr(config, "NORMALIZATION_LLM_MODEL", "anthropic.claude-3-haiku-20240307-v1:0")
+                response = self.bedrock_client.invoke_model(
+                    body=json.dumps(payload),
+                    modelId=model_id,
+                    accept="application/json",
+                    contentType="application/json"
+                )
+                response_body = json.loads(response.get("body").read())
+                response_text = response_body["content"][0]["text"]
+             except Exception as e:
+                 print(f"Normalization failed: {e}")
+                 return {"normalized_query": user_input, "domain": None}
+        else:
+            try:
+                response = self.llm.invoke(prompt)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+            except Exception as e:
+                print(f"Normalization failed: {e}")
+                return {"normalized_query": user_input, "domain": None}
 
-        # Pass 2: Specialty-filtered search (if enabled and specialty detected)
-        filtered_results = []
-        if getattr(config, 'ENABLE_SPECIALTY_FILTER', False):
-            specialty = detect_specialty(service_description)
-            if specialty:
-                try:
-                    filtered_results = self.vector_store.similarity_search(
-                        service_description,
-                        k=config.TOP_K_FILTERED if hasattr(config, 'TOP_K_FILTERED') else config.TOP_K,
-                        filter={"chapter_name": specialty},
-                    )
-                except Exception as e:
-                    # Filtered search may fail if no docs match the filter
-                    print(f"  Filtered search failed for specialty '{specialty}': {e}")
+        # Parse response
+        normalized_query = user_input
+        domain_guess = None
+        
+        try:
+            lines = response_text.split('\n')
+            for i, line in enumerate(lines):
+                if "Normalized Query:" in line:
+                    normalized_query = lines[i+1].strip()
+                elif "Coding Domain Guess:" in line:
+                    domain_guess = lines[i+1].strip().lower()
+                    # Clean up domain guess
+                    if "sbs" in domain_guess: domain_guess = "sbs_v2"
+                    elif "gmdn" in domain_guess: domain_guess = "gmdn_v2"
+                    elif "gtin" in domain_guess: domain_guess = "gtin_v2"
+        except Exception:
+            pass
+            
+        return {
+            "normalized_query": normalized_query,
+            "domain": domain_guess,
+            "original_response": response_text 
+        }
 
-        # Merge and deduplicate (preserve order: general first, then filtered additions)
-        seen_codes = set()
-        merged = []
+    def retrieve_candidates(self, query: str, predicted_domain: str = None) -> list:
+        """
+        Retrieve candidates from Pinecone with namespace routing using Pinecone Inference.
+        """
+        # Generate embedding using Pinecone Inference API
+        model = getattr(config, "PINECONE_INFERENCE_MODEL", "multilingual-e5-large") 
+        try:
+            embeddings_response = self.pc.inference.embed(
+                model=model,
+                inputs=[query],
+                parameters={"input_type": "query"}
+            )
+            query_embedding = embeddings_response[0]['values']
+        except Exception as e:
+            print(f"Pinecone Inference Failed: {e}")
+            return []
+        
+        results = []
+        
+        # Strategy: 
+        # 1. Search Predicted Namespace (Top High)
+        # 2. Search Other Namespaces (Top Low)
 
-        for doc in general_results + filtered_results:
-            code = doc.metadata.get("code", "")
-            system = doc.metadata.get("system", "")
-            key = f"{system}:{code}"
+        namespaces = getattr(config, "PINECONE_NAMESPACES", [])
+        if predicted_domain and predicted_domain in namespaces:
+            primary_ns = predicted_domain
+            secondary_ns = [ns for ns in namespaces if ns != primary_ns]
+        else:
+            primary_ns = None
+            secondary_ns = namespaces # Search all equally if no prediction
+            
+        # Helper to process Pinecone match
+        def process_matches(matches, system_override=None):
+            docs = []
+            for match in matches:
+                meta = match['metadata']
+                
+                # Determine system
+                system = meta.get('system')
+                if not system:
+                    if system_override:
+                        system = system_override.replace("_v2", "").upper()
+                    elif meta.get("sbs_code") or meta.get("sbs_code_hyphenated"):
+                        system = "SBS"
+                    elif meta.get("gtin_code"):
+                        system = "GTIN"
+                    elif meta.get("gmdn_code"):
+                        system = "GMDN"
+                
+                meta['system'] = system
+                
+                # Normalize 'code' and 'description' based on system
+                if system == "SBS":
+                    meta['code'] = meta.get('sbs_code_hyphenated') or str(meta.get('sbs_code', '')).replace('.0', '')
+                    meta['description'] = meta.get('long_description') or meta.get('short_description', '')
+                    # Additional SBS fields
+                    meta['code_numeric'] = str(meta.get('sbs_code', '')).replace('.0', '')
+                    meta['code_hyphenated'] = meta.get('sbs_code_hyphenated', '')
+                    
+                elif system == "GTIN":
+                    meta['code'] = meta.get('gtin_code', '')
+                    meta['description'] = meta.get('display', '')
+                    # Additional GTIN fields
+                    meta['ingredients'] = meta.get('ingredients', '')
+                    meta['strength'] = meta.get('strength', '')
+                    
+                elif system == "GMDN":
+                    meta['code'] = meta.get('gmdn_code', '')
+                    meta['description'] = meta.get('term_name', '')
+                    # Additional GMDN fields
+                    meta['term_name'] = meta.get('term_name', '')
+                    meta['term_definition'] = meta.get('term_definition', '')
 
-            if key not in seen_codes:
-                seen_codes.add(key)
-                merged.append(doc)
+                # Fallback for display text if no description found
+                text_content = meta.get('text') or meta.get('description', '') or str(meta)
 
-        max_candidates = getattr(config, 'MAX_CANDIDATES_TO_LLM', 20)
-        return merged[:max_candidates]
+                from langchain_core.documents import Document
+                doc = Document(page_content=text_content, metadata=meta)
+                doc.metadata['score'] = match['score']
+                docs.append(doc)
+            return docs
+
+        # Execute Searches
+        import concurrent.futures
+        
+        search_tasks = []
+        
+        # Primary Search
+        if primary_ns:
+            k_primary = getattr(config, "ROUTING_PRIMARY_K", 15)
+            try:
+                res = self.index.query(
+                    vector=query_embedding,
+                    top_k=k_primary,
+                    namespace=primary_ns,
+                    include_metadata=True
+                )
+                results.extend(process_matches(res['matches'], primary_ns))
+            except Exception as e:
+                print(f"Error searching namespace {primary_ns}: {e}")
+
+        # Secondary Searches (Safety Net)
+        k_secondary = getattr(config, "ROUTING_SECONDARY_K", 3)
+        for ns in secondary_ns:
+             try:
+                res = self.index.query(
+                    vector=query_embedding,
+                    top_k=k_secondary,
+                    namespace=ns,
+                    include_metadata=True
+                )
+                results.extend(process_matches(res['matches'], ns))
+             except Exception as e:
+                print(f"Error searching namespace {ns}: {e}")
+                
+        # Deduplicate results based on code+system
+        seen = set()
+        unique_results = []
+        # Sort by score descending
+        results.sort(key=lambda x: x.metadata.get('score', 0), reverse=True)
+        
+        for doc in results:
+            key = f"{doc.metadata.get('system')}:{doc.metadata.get('code')}"
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(doc)
+                
+        return unique_results[:config.MAX_CANDIDATES_TO_LLM]
 
     def match_single(self, service_description: str) -> dict:
         """
@@ -215,14 +339,16 @@ class CodeMatcher:
 
         self.cache_misses += 1
 
-        # Step 1: Query expansion (abbreviation → formal terminology)
-        if getattr(config, 'ENABLE_QUERY_EXPANSION', False):
-            expanded_query = expand_query(service_description)
-        else:
-            expanded_query = service_description
-
-        # Step 2: Two-pass retrieval with expanded query
-        docs = self.retrieve_candidates(expanded_query)
+        # Step 1: Normalization & Routing (New Arch)
+        normalization_result = self.normalize_query(service_description)
+        mined_query = normalization_result["normalized_query"]
+        predicted_domain = normalization_result["domain"]
+        
+        # Step 2: Namespace-aware Retrieval
+        # Use refined query + original input for hybrid search signal? 
+        # Prompt only asked to rewrite, but let's trust the rewrite for retrieval 
+        # while keeping original for final LLM check.
+        docs = self.retrieve_candidates(mined_query, predicted_domain)
 
         if not docs:
             result = {
@@ -578,8 +704,7 @@ class CodeMatcher:
             gtin_ingredients_list = []
             gtin_strength_list = []
             
-            # GMDN-specific fields
-        # GMDN-specific fields
+
             gmdn_code_list = []
             gmdn_name_list = []
             gmdn_definition_list = []
@@ -639,7 +764,8 @@ class CodeMatcher:
                     sheet_stats[confidence] += 1
 
                 # Rate limiting to avoid API throttling
-                time.sleep(0.1)
+                delay = getattr(config, "MATCH_BATCH_DELAY", 5.0)
+                time.sleep(delay)
 
             # Add new columns to DataFrame in the requested order
             # For SBS: SBS Code (numeric), Short Description, SBS Code Hyphenated
@@ -769,8 +895,9 @@ class CodeMatcher:
         all_results = []
         stats = {}
 
-        # Semaphore to limit concurrent requests (reduced to avoid rate limiting)
-        semaphore = asyncio.Semaphore(1)  # Only 1 concurrent request to AWS Bedrock
+        # Semaphore to limit concurrent requests
+        conc = getattr(config, "ASYNC_CONCURRENCY", 1)
+        semaphore = asyncio.Semaphore(conc)
 
         async def match_single_async(desc: str) -> dict:
             """Async wrapper for match_single with rate limiting."""
@@ -779,7 +906,8 @@ class CodeMatcher:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, self.match_single, desc)
                 # Delay to avoid overwhelming the API
-                await asyncio.sleep(5.0)  # 5 second delay between requests
+                delay = getattr(config, "MATCH_BATCH_DELAY", 5.0)
+                await asyncio.sleep(delay)
                 return result
 
         for sheet_name in xls.sheet_names:

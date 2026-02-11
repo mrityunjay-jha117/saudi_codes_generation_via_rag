@@ -4,6 +4,41 @@ prompts.py - Prompt templates for the Saudi Billing Code Matcher.
 This module contains the LLM prompt template and candidate formatting logic.
 """
 
+
+NORMALIZATION_PROMPT = """You are a medical code query normalization assistant.
+
+The user will provide a short healthcare-related description.  
+The description may belong to any of these coding systems:
+
+1. SBS (procedures, surgeries, dental treatments)
+2. GMDN (medical device names and categories)
+3. GTIN (commercial product identifiers, implants, consumables)
+
+Your task is to rewrite the input into the best possible standardized search query
+that will retrieve the correct code from a vector database.
+
+Rules:
+- Do NOT guess a code.
+- Only rewrite the query into formal terminology.
+- Expand abbreviations into full clinical terms.
+- Replace informal words with standardized medical vocabulary.
+- Replace informal words with standardized medical vocabulary.
+- If the input is dental/periodontal, use periodontal procedure terms.
+- If the input sounds like a device/product, rewrite in GMDN-style device language.
+- If the input sounds like a commercial packaged item, rewrite in GTIN/product style.
+
+Output format:
+
+Normalized Query:
+<single best standardized query>
+
+Coding Domain Guess:
+<sbs_v2 / gmdn_v2 / gtin_v2>
+
+User Input:
+"{service_description}"
+"""
+
 MATCH_PROMPT = """You are a Saudi healthcare billing code expert specialized in NPHIES compliance.
 
 Candidates below were retrieved by TEXT SIMILARITY and MAY CONTAIN IRRELEVANT RESULTS.

@@ -31,103 +31,24 @@ def get_matcher():
     return CodeMatcher()
 
 
-def check_vector_db_exists() -> bool:
-    """Check if the vector database has been populated."""
-    import chromadb
-    try:
-        client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
-        collection = client.get_collection(config.COLLECTION_NAME)
-        return collection.count() > 0
-    except Exception:
-        return False
 
 
-# ============== SIDEBAR: Reference Data ==============
+
+# ============== SIDEBAR: Configuration ==============
 with st.sidebar:
-    st.header("Reference Data")
-
-    # Show vector DB status
-    if check_vector_db_exists():
-        st.success("Vector DB Ready")
-    else:
-        st.warning("No Vector DB - upload reference data first")
-
-    st.divider()
-
-    # Reference file uploader
-    ref_file = st.file_uploader(
-        "1. Upload Reference Excel (SBS/GTIN/GMDN)",
-        type=["xlsx"],
-        key="ref_excel",
-        help="The reference file containing SBS, GTIN, and GMDN codes"
-    )
-
-    # Synonyms file uploader
-    syn_file = st.file_uploader(
-        "2. Upload SBS Synonyms CSV (Optional)",
-        type=["csv"],
-        key="syn_csv",
-        help="The CSV file containing SBS code synonyms"
-    )
-
-    if ref_file and st.button("Index Reference Data", type="primary"):
-        # Save reference Excel
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
-            f.write(ref_file.read())
-            ref_path = f.name
-            
-        # Save synonyms CSV if provided
-        syn_path = None
-        if syn_file:
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
-                f.write(syn_file.read())
-                syn_path = f.name
-
-        with st.spinner("Building vector index..."):
-            try:
-                from ingest import build_documents, create_vector_store
-
-                # Pass both paths to build_documents
-                docs = build_documents(excel_path=ref_path, synonyms_path=syn_path)
-                create_vector_store(docs)
-
-                st.success(f"Indexed {len(docs)} codes!")
-
-                # Clear the cached matcher so it reloads
-                get_matcher.clear()
-
-            except Exception as e:
-                st.error(f"Error indexing: {str(e)}")
-            finally:
-                # Clean up temp files
-                try:
-                    if os.path.exists(ref_path):
-                        os.unlink(ref_path)
-                    if syn_path and os.path.exists(syn_path):
-                        os.unlink(syn_path)
-                except Exception:
-                    pass
-
-    st.divider()
+    st.header("Configuration")
 
     # Configuration info
-    st.subheader("Configuration")
-    if config.USE_LOCAL:
-        st.info("Using LOCAL models (no AWS credentials found)")
-        st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace)")
-        st.caption("LLM: Ollama gemma2:2b")
-    else:
-        st.info("Using AWS Bedrock")
-        st.caption("Embedding: all-MiniLM-L6-v2 (HuggingFace)")
-        st.caption(f"LLM: {config.LLM_MODEL}")
-        st.caption(f"Region: {config.AWS_REGION}")
+    st.info("Using AWS Bedrock")
+    st.caption(f"Embedding: {getattr(config, 'PINECONE_INFERENCE_MODEL', 'multilingual-e5-large')}")
+    st.caption(f"LLM: {config.LLM_MODEL}")
+    st.caption(f"Region: {config.AWS_REGION}")
 
     st.divider()
     st.subheader("V2 Features")
-    st.caption(f"Query Expansion: {'ON' if getattr(config, 'ENABLE_QUERY_EXPANSION', False) else 'OFF'}")
-    st.caption(f"Specialty Filter: {'ON' if getattr(config, 'ENABLE_SPECIALTY_FILTER', False) else 'OFF'}")
+    st.caption("Normalization & Smart Routing: ON")
     st.caption(f"Post-LLM Validation: {'ON' if getattr(config, 'ENABLE_POST_LLM_VALIDATION', False) else 'OFF'}")
-    st.caption(f"Candidates: {getattr(config, 'TOP_K_GENERAL', 10)} general + {getattr(config, 'TOP_K_FILTERED', 10)} filtered")
+    st.caption(f"Candidates: {getattr(config, 'TOP_K_GENERAL', 10)} per namespace")
 
 
 # ============== MAIN AREA ==============
@@ -149,9 +70,8 @@ with col1:
                             help="10x faster processing - recommended for all files")
 
 if mapping_file and st.button("Match Codes", type="primary", width="stretch"):
-    if not check_vector_db_exists():
-        st.error("Please index reference data first (see sidebar)")
-    else:
+    # Save uploaded file to temp location
+    if True:
         # Save uploaded file to temp location
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             f.write(mapping_file.read())
@@ -227,10 +147,7 @@ test_input = st.text_input(
 )
 
 if test_input and st.button("Match", key="single_match"):
-    if not check_vector_db_exists():
-        st.error("Please index reference data first (see sidebar)")
-    else:
-        with st.spinner("Matching..."):
+    with st.spinner("Matching..."):
             try:
                 matcher = get_matcher()
                 result = matcher.match_single(test_input)
@@ -263,4 +180,4 @@ if test_input and st.button("Match", key="single_match"):
 
 # ============== Footer ==============
 st.divider()
-st.caption("Saudi Billing Code Matcher - RAG POC | Built with LangChain + ChromaDB + Streamlit")
+st.caption("Saudi Billing Code Matcher - RAG V3 | Built with Pinecone Serverless + AWS Bedrock")
