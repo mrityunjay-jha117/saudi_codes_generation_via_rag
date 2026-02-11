@@ -24,9 +24,10 @@ ASYNC_CONCURRENCY = 5   # Parallel requests (increased for speed)
 
 # --- V2 Redesign Settings ---
 # Routing & Retrieval
-ROUTING_PRIMARY_K = 10     # Candidates from predicted namespace
-ROUTING_SECONDARY_K = 3     # Candidates from other namespaces (fallback)
-MAX_CANDIDATES_TO_LLM = 10  # Context window limit
+# Routing & Retrieval
+ROUTING_PRIMARY_K = 20     # Candidates from predicted namespace (Increased to avoid missing drugs)
+ROUTING_SECONDARY_K = 5     # Candidates from other namespaces (fallback)
+MAX_CANDIDATES_TO_LLM = 15  # Context window limit (Increased to see more options)
 
 
 

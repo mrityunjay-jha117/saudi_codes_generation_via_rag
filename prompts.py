@@ -24,6 +24,9 @@ Rules:
 - Replace informal words with standardized medical vocabulary.
 - Replace informal words with standardized medical vocabulary.
 - If the input is dental/periodontal, use periodontal procedure terms.
+- If the input is a drug, brand name, or contains dosage (mg, ml, tablet, capsule), classify as gtin_v2.
+- DO NOT convert drug names to synonyms (e.g. keep "Paracetamol", do not change to "Acetaminophen").
+- Keep original spelling of drugs/brands.
 - If the input sounds like a device/product, rewrite in GMDN-style device language.
 - If the input sounds like a commercial packaged item, rewrite in GTIN/product style.
 

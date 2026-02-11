@@ -155,6 +155,9 @@ class CodeMatcher:
         except Exception:
             pass
             
+        
+        print(f"\n[DEBUG] Input: '{user_input}' -> Normalized: '{normalized_query}' (Domain: {domain_guess})\n")
+        
         return {
             "normalized_query": normalized_query,
             "domain": domain_guess,
