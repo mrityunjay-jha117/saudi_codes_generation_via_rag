@@ -155,9 +155,7 @@ class CodeMatcher:
         except Exception:
             pass
             
-        
-        print(f"\n[DEBUG] Input: '{user_input}' -> Normalized: '{normalized_query}' (Domain: {domain_guess})\n")
-        
+                
         return {
             "normalized_query": normalized_query,
             "domain": domain_guess,
@@ -809,10 +807,32 @@ class CodeMatcher:
         all_dfs = [df for _, df in all_results]
         combined_df = pd.concat(all_dfs, ignore_index=True)
         
+        
         # Separate by code system
         df_sbs = combined_df[combined_df["Code System"] == "SBS"].copy()
         df_gtin = combined_df[combined_df["Code System"] == "GTIN"].copy()
         df_gmdn = combined_df[combined_df["Code System"] == "GMDN"].copy()
+        
+        # Filter Unmatched (Robust check)
+        # Convert to string and upper case to handle variations
+        combined_df["Confidence_Str"] = combined_df["Confidence"].astype(str).str.upper().str.strip()
+        
+        print("[DEBUG] Confidence Distribution:")
+        print(combined_df["Confidence_Str"].value_counts())
+        print("[DEBUG] Sample Data (Confidence, Matched Code):")
+        print(combined_df[["Confidence", "Matched Code"]].head(20))
+        
+        df_unmatched = combined_df[
+            (combined_df["Confidence_Str"] == "NONE") | 
+            (combined_df["Confidence_Str"] == "NAN") |
+            (combined_df["Confidence_Str"] == "") |
+            (combined_df["Matched Code"].isnull()) |
+            (combined_df["Matched Code"] == "") |
+            (combined_df["Code System"].isnull()) | 
+            (combined_df["Code System"] == "")
+        ].copy()
+        
+        print(f"\n[DEBUG] Found {len(df_unmatched)} unmatched rows.")
         
         # Yellow fill for highlighting
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -860,9 +880,32 @@ class CodeMatcher:
                 # Apply yellow highlighting
                 ws = writer.sheets["GMDN"]
                 for row in range(2, len(df_gmdn_output) + 2):
-                    ws.cell(row=row, column=3).fill = yellow_fill  # GMDN Code
                     ws.cell(row=row, column=4).fill = yellow_fill  # GMDN Name
                     ws.cell(row=row, column=5).fill = yellow_fill  # GMDN Definition
+
+            # Write UNMATCHED sheet
+            if not df_unmatched.empty:
+                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
+                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
+                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
+                # Red fill for unmatched
+                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                if "UNMATCHED" in writer.sheets:
+                    ws = writer.sheets["UNMATCHED"]
+                    for row in range(2, len(df_unmatched_output) + 2):
+                         ws.cell(row=row, column=1).fill = red_fill
+
+            # Write UNMATCHED sheet
+            if not df_unmatched.empty:
+                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
+                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
+                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
+                # Red fill for unmatched
+                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                if "UNMATCHED" in writer.sheets:
+                    ws = writer.sheets["UNMATCHED"]
+                    for row in range(2, len(df_unmatched_output) + 2):
+                         ws.cell(row=row, column=1).fill = red_fill
 
         print(f"\nResults saved to {output_excel_path}")
 
@@ -1022,9 +1065,26 @@ class CodeMatcher:
         combined_df = pd.concat(all_dfs, ignore_index=True)
         
         # Separate by code system
+        # Separate by code system
         df_sbs = combined_df[combined_df["Code System"] == "SBS"].copy()
         df_gtin = combined_df[combined_df["Code System"] == "GTIN"].copy()
         df_gmdn = combined_df[combined_df["Code System"] == "GMDN"].copy()
+        
+        # Filter Unmatched (Robust)
+        combined_df["Confidence_Str"] = combined_df["Confidence"].astype(str).str.upper().str.strip()
+        
+        print("[DEBUG ASYNC] Confidence Distribution:")
+        print(combined_df["Confidence_Str"].value_counts())
+        
+        df_unmatched = combined_df[
+            (combined_df["Confidence_Str"] == "NONE") | 
+            (combined_df["Confidence_Str"] == "NAN") |
+            (combined_df["Confidence_Str"] == "") |
+            (combined_df["Matched Code"].isnull()) |
+            (combined_df["Matched Code"] == "") |
+            (combined_df["Code System"].isnull()) | 
+            (combined_df["Code System"] == "")
+        ].copy()
         
         # Yellow fill for highlighting
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -1075,6 +1135,18 @@ class CodeMatcher:
                     ws.cell(row=row, column=3).fill = yellow_fill  # GMDN Code
                     ws.cell(row=row, column=4).fill = yellow_fill  # GMDN Name
                     ws.cell(row=row, column=5).fill = yellow_fill  # GMDN Definition
+
+            # Write UNMATCHED sheet
+            if not df_unmatched.empty:
+                unmatched_cols = ["Service Code", "Service Description", "Confidence", "Reasoning"]
+                df_unmatched_output = df_unmatched[[col for col in unmatched_cols if col in df_unmatched.columns]]
+                df_unmatched_output.to_excel(writer, sheet_name="UNMATCHED", index=False)
+                # Red fill for unmatched
+                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                if "UNMATCHED" in writer.sheets:
+                    ws = writer.sheets["UNMATCHED"]
+                    for row in range(2, len(df_unmatched_output) + 2):
+                         ws.cell(row=row, column=1).fill = red_fill
 
         print(f"\nResults saved to {output_excel_path}")
 
