@@ -19,7 +19,7 @@ PINECONE_INFERENCE_MODEL = "multilingual-e5-large"
 PINECONE_NAMESPACES = ["sbs_v2", "gmdn_v2", "gtin_v2"]
 
 # Rate Limiting & Performance
-MATCH_BATCH_DELAY = 5.0  # Seconds (increased for reliability)
+MATCH_BATCH_DELAY = 2.0  # Seconds (increased for reliability)
 ASYNC_CONCURRENCY = 1    # Sequential processing to avoid AWS throttling
 
 # --- V2 Redesign Settings ---

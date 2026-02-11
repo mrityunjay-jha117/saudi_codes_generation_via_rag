@@ -965,28 +965,27 @@ class CodeMatcher:
             completed = 0
             total = len(descriptions)
             
-            async def track_progress(task, idx):
+            async def track_progress(task, idx, desc):
                 nonlocal completed
                 result = await task
                 completed += 1
                 
-                # Print progress every 10 rows or at milestones
-                if completed % 10 == 0 or completed == total:
-                    progress = (completed / total) * 100
-                    elapsed = time.time() - start_time
-                    
-                    if completed > 1:
-                        avg_time = elapsed / completed
-                        remaining = total - completed
-                        eta_seconds = avg_time * remaining
-                        eta_minutes = eta_seconds / 60
-                        print(f"  Progress: {completed}/{total} ({progress:.1f}%) | ETA: {eta_minutes:.1f}m")
-                    else:
-                        print(f"  Progress: {completed}/{total} ({progress:.1f}%)")
+                progress = (completed / total) * 100
+                elapsed = time.time() - start_time
+                
+                desc_preview = str(desc)[:50] if desc else "(empty)"
+                
+                # Print progress for EVERY row to show logs in server
+                if completed > 0:
+                    avg_time = elapsed / completed
+                    remaining = total - completed
+                    eta_seconds = avg_time * remaining
+                    eta_minutes = eta_seconds / 60
+                    print(f"  [{sheet_name}] [{completed}/{total}] ({progress:.1f}%) | ETA: {eta_minutes:.1f}m | {desc_preview}...", flush=True)
                 
                 return result
             
-            tasks = [track_progress(match_single_async(desc), idx) for idx, desc in enumerate(descriptions)]
+            tasks = [track_progress(match_single_async(desc), idx, desc) for idx, desc in enumerate(descriptions)]
             results = await asyncio.gather(*tasks)
 
             # Extract results into lists
