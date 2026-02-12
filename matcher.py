@@ -236,7 +236,12 @@ class CodeMatcher:
                 # Fallback for display text if no description found
                 text_content = meta.get('text') or meta.get('description', '') or str(meta)
 
-                from langchain_core.documents import Document
+                # Simple Document class to replace LangChain
+                class Document:
+                    def __init__(self, page_content, metadata=None):
+                        self.page_content = page_content
+                        self.metadata = metadata or {}
+
                 doc = Document(page_content=text_content, metadata=meta)
                 doc.metadata['score'] = match['score']
                 docs.append(doc)

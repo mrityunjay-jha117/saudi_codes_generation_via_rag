@@ -1,106 +1,63 @@
-import pandas as pd
+#!/usr/bin/env python3
+import argparse
+import asyncio
 import os
-import time
-import csv
+import sys
+
+# Add current directory to path to find local modules
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import config
 from matcher import CodeMatcher
-import asyncio
 
-# --- Configuration ---
-INPUT_FILE = "data/input/input_file.xlsx"  # Change this to your actual file name
-OUTPUT_FILE = "data/output/final_output.xlsx"
-CHECKPOINT_FILE = "data/output/checkpoint_progress.csv"
-
-def process_file_safely():
-    """
-    Runs the matching process row-by-row and saves to CSV immediately.
-    Safe for small RAM execution and prevents data loss.
-    """
-    print("Initializing Matcher...")
-    matcher = CodeMatcher()
+async def main():
+    parser = argparse.ArgumentParser(description="Run Saudi Code Matcher via CLI")
+    parser.add_argument("input_file", nargs="?", default="data/input/input.xlsx", help="Path to input Excel file")
+    parser.add_argument("output_file", nargs="?", default="data/output/output.xlsx", help="Path to output Excel file")
     
-    # Ensure directories exist
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    args = parser.parse_args()
     
-    # Check input
-    if not os.path.exists(INPUT_FILE):
-        print(f"Error: Input file '{INPUT_FILE}' not found!")
-        print("Please upload your file to 'data/input/' folder via FileZilla.")
+    # Check if input file exists
+    if not os.path.exists(args.input_file):
+        print(f"Error: Input file '{args.input_file}' not found.")
+        print("Please upload your Excel file or specify the correct path.")
+        print(f"Example: python run_cli.py my_data.xlsx results.xlsx")
         return
 
-    print(f"Reading {INPUT_FILE}...")
-    xls = pd.ExcelFile(INPUT_FILE)
+    print("="*60)
+    print("SAUDI CODE MATCHER - CLI MODE")
+    print("="*60)
+    print(f"Input File:  {args.input_file}")
+    print(f"Output File: {args.output_file}")
+    print(f"Model:       {config.LLM_MODEL}")
+    print("-" * 60)
     
-    # Prepare Checkpoint CSV
-    file_exists = os.path.exists(CHECKPOINT_FILE)
-    csv_headers = [
-        "Sheet", "Input Description", "Matched Code", "Code System", 
-        "Matched Description", "Confidence", "Reasoning"
-    ]
-    
-    # Open CSV in append mode
-    with open(CHECKPOINT_FILE, mode='a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(csv_headers)
-            
-        total_sheets = len(xls.sheet_names)
-        
-        for i, sheet_name in enumerate(xls.sheet_names):
-            print(f"\nProcessing Sheet {i+1}/{total_sheets}: {sheet_name}")
-            df = pd.read_excel(xls, sheet_name=sheet_name)
-            
-            if "Service Description" not in df.columns:
-                print(f"Skipping {sheet_name} (Missing 'Service Description' column)")
-                continue
-                
-            # Filter for already processed rows if resuming?
-            # For simplicity in this script, we append. You can manually delete csv to restart.
-            
-            rows = df.to_dict('records')
-            total_rows = len(rows)
-            
-            for idx, row in enumerate(rows):
-                desc = str(row.get("Service Description", "")).strip()
-                
-                # Visual logging
-                print(f"[{idx+1}/{total_rows}] Matching: {desc[:50]}...", end="\r")
-                
-                if not desc or desc.lower() == 'nan':
-                    writer.writerow([sheet_name, desc, "", "", "", "NONE", "Empty/Invalid"])
-                    continue
-                
-                # Perform Match
-                try:
-                    result = matcher.match_single(desc)
-                    
-                    # Write to CSV IMMEDIATELY
-                    writer.writerow([
-                        sheet_name,
-                        desc,
-                        result.get("matched_code", ""),
-                        result.get("code_system", ""),
-                        result.get("matched_description", ""),
-                        result.get("confidence", "NONE"),
-                        result.get("reasoning", "")
-                    ])
-                    f.flush()  # Force write to disk
-                    
-                except Exception as e:
-                    print(f"\nError on row {idx+1}: {e}")
-                    writer.writerow([sheet_name, desc, "ERROR", "ERROR", str(e), "NONE", "Error"])
-                    f.flush()
-
-    print(f"\n\nProcessing Complete! Checkpoint saved to {CHECKPOINT_FILE}")
-    print("Converting Checkpoint CSV to Final Excel...")
-    
-    # Convert CSV to Excel for final easy reading
     try:
-        df_final = pd.read_csv(CHECKPOINT_FILE)
-        df_final.to_excel(OUTPUT_FILE, index=False)
-        print(f"Final Excel saved: {OUTPUT_FILE}")
+        print("Initializing Matcher (connecting to databases)...")
+        matcher = CodeMatcher()
+        
+        print("\nStarting Async Matching Process...")
+        print("This may take a few minutes depending on file size.\n")
+        
+        # Run the async batch matcher
+        await matcher.match_batch_async(args.input_file, args.output_file)
+        
+        print("\n" + "="*60)
+        print(f"SUCCESS! Output saved to: {args.output_file}")
+        print("="*60)
+        
+    except KeyboardInterrupt:
+        print("\n\nProcess interrupted by user.")
     except Exception as e:
-        print(f"Could not create Excel (CSV is safe though): {e}")
+        print(f"\nERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    process_file_safely()
+    if os.name == 'nt':  # Windows
+        asyncio.run(main())
+    else:  # Unix/Linux (handling loops properly)
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            pass

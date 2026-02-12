@@ -1,137 +1,119 @@
-# EC2 Deployment Guide for Saudi Code Matcher
+# EC2 Commands Reference List
 
-This guide explains how to run your Python script on a small AWS EC2 instance safely using `tmux` and `FileZilla`.
+## 1. Connection (Login)
 
-## Prerequisites
-
-- An active AWS EC2 Instance (Ubuntu or Amazon Linux recommended).
-- The `.pem` key file you downloaded when creating the instance.
-- **FileZilla** installed on your computer.
-
----
-
-## Step 1: Connect to Your EC2 Instance
-
-1. Open your terminal (or Command Prompt on Windows).
-2. Navigate to where your `.pem` key is.
-3. Run this command (replace with your details):
-   ```bash
-   ssh -i "your-key.pem" ubuntu@your-ec2-public-ip
-   ```
-   _(If using Amazon Linux, use `ec2-user@...` instead of `ubuntu@...`)_
-
----
-
-## Step 2: Set Up the Environment (First Time Only)
-
-Run these commands one by one to install Python and necessary tools:
+_Run this from your local computer terminal (Windows CMD/PowerShell)_
 
 ```bash
-# Update system
+ssh -i "your.pem" ubuntu@your-ec2-ip
+```
+
+## 2. Transfer Code
+
+**Automatic Method (Recommended):**
+
+1.  Edit `deploy.bat` and put your Key Name and EC2 IP address in it.
+2.  Double-click `deploy.bat`!
+
+This will upload `run_cli.py`, `matcher.py`, `config.py`, `prompts.py`, `requirements.txt`, `.env`, and the `data/` folder.
+
+**Manual Method (Command Line):**
+
+If you cannot use `deploy.bat`, use `scp`:
+
+```bash
+scp -i "your-key.pem" run_cli.py app.py config.py matcher.py prompts.py requirements.txt .env ubuntu@your-ec2-ip:~/saudi_matcher/
+scp -i "your-key.pem" -r data docs ubuntu@your-ec2-ip:~/saudi_matcher/
+```
+
+## 3. Server Setup (First Time Only)
+
+_Run these on the EC2 server to update and install tools_
+
+```bash
+# Update system packages
 sudo apt update && sudo apt upgrade -y
 
-# Install Python pip and basic tools
-sudo apt install python3-pip python3-venv htop tmux -y
+# Install Python, Pip, Virtualenv, Tmux, and Htop
+sudo apt install python3-pip python3-venv tmux htop -y
 
-# Create a project folder
-mkdir saudi_matcher
+# Create project directory (if not uploaded automatically)
+mkdir -p saudi_matcher
+
+# Enter the directory
 cd saudi_matcher
+```
 
-# Create a virtual environment (recommended for small RAM)
+## 4. Python Environment Setup
+
+```bash
+# Create virtual environment (once)
 python3 -m venv venv
+
+# Activate virtual environment (run this every time you log in)
 source venv/bin/activate
 ```
 
----
+_Tip: After activation, you will see `(venv)` at the start of your command line._
 
-## Step 3: Transfer Files using FileZilla
+## 5. Install Dependencies
 
-1. Open **FileZilla**.
-2. Go to **File > Site Manager > New Site**.
-   - **Protocol**: SFTP - SSH File Transfer Protocol.
-   - **Host**: Your EC2 Public IP.
-   - **Logon Type**: Key file.
-   - **User**: `ubuntu` (or `ec2-user`).
-   - **Key file**: Browse and select your `.pem` file.
-3. Click **Connect**.
-4. On the **Remote site** (right side), navigate to `/home/ubuntu/saudi_matcher`.
-5. Upload these files from your local computer:
-   - `run_cli.py` (The new script I created for you)
-   - `matcher.py`
-   - `config.py`
-   - `prompts.py`
-   - `.env` (Make sure this has your PINECONE_API_KEY and AWS credentials)
-   - `requirements.txt` (Create this locally if you haven't: usage `pip freeze > requirements.txt`)
-   - Create a folder `data/input` on the server and upload your Excel file there. **Rename your excel file to `input_file.xlsx`** or update the script.
-
----
-
-## Step 4: Install Python Libraries
-
-Back in your SSH terminal:
+_Make sure (venv) is active first_
 
 ```bash
-# Make sure you are in the folder and venv is active
-source venv/bin/activate
-
-# Install requirements (if you uploaded requirements.txt)
+# Option A: If you uploaded requirements.txt
 pip install -r requirements.txt
 
-# OR Install manually if you don't have requirements.txt
+# Option B: Install manually
 pip install pandas openpyxl pinecone-client boto3 python-dotenv langchain
 ```
 
----
+## 6. Running with Tmux (Keep script running in background)
 
-## Step 5: Run with Tmux (The Important Part)
+`tmux` ensures your script doesn't stop if your internet disconnects.
 
-`tmux` allows the script to keep running even if you close your computer or disconnect.
+### Start a New Session
 
-1. **Start a new tmux session**:
+```bash
+tmux new -s matcher_job
+```
 
-   ```bash
-   tmux new -s matcher_job
-   ```
+### Run the Script (Inside Tmux)
 
-   _(You will see a fresh terminal screen with a green bar at the bottom)_
+```bash
+# 1. Activate venv inside tmux
+source venv/bin/activate
 
-2. **Run the script**:
+# 2. Run your script
+python run_cli.py
+```
 
-   ```bash
-   # Ensure venv is active
-   source venv/bin/activate
+### Detach (Exit Tmux but keep script running)
 
-   # Run the robust CLI script
-   python run_cli.py
-   ```
+Press these keys in order:
 
-3. **Detach from tmux** (Leave it running in background):
-   - Press `Ctrl + B`, then release both and press `D`.
-   - You will return to your normal terminal. The script is still running!
+1. `Ctrl` + `B`
+2. Release both keys
+3. Press `D`
 
----
+### Re-connect to Session (Check progress)
 
-## Step 6: Monitor or Stop
+```bash
+tmux attach -t matcher_job
+```
 
-- **To check the process later**:
-  ```bash
-  tmux attach -t matcher_job
-  ```
-- **To check RAM usage**: Open a new terminal connection and run `htop`.
-- **To kill the process**: Inside tmux, press `Ctrl + C`.
+### Kill Session (Stop script forcefully)
 
----
+```bash
+tmux kill-session -t matcher_job
+```
 
-## Step 7: Download Results
+## 7. Monitoring & Maintenance
 
-1. Once the script finishes, open FileZilla using the same connection.
-2. Navigate to `saudi_matcher/data/output/`.
-3. You will see:
-   - `checkpoint_progress.csv` (Real-time logs, saved row-by-row)
-   - `final_output.xlsx` (Final formatted Excel)
-4. Drag them to your local computer.
+```bash
+# Check CPU/RAM usage
+htop
 
-## Safety Features Added
-
-- **Incremental Saving**: The `run_cli.py` writes to a `.csv` file after EVERY row. If the server crashes or runs out of RAM, you only lose the last row being processed.
-- **Low RAM Usage**: The script processes row-by-row instead of loading massive objects.
+# Check disk space usage
+df -h
+```
